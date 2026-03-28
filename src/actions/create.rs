@@ -86,8 +86,8 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/"));
 
-    // Sanitize branch name for use as a directory name (replace / with _)
-    let sanitized_branch = branch_name.replace('/', "_");
+    // Sanitize branch name for use as a directory name
+    let sanitized_branch = sanitize_branch_name(&branch_name);
 
     let worktree_base = parent_dir.join(format!("{}-worktree", repo_name));
     let worktree_path = worktree_base.join(&sanitized_branch);
@@ -191,4 +191,15 @@ fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBu
     } else {
         result
     }
+}
+
+/// Sanitize a branch name for use as a directory name.
+/// Replaces characters that are problematic on various filesystems.
+fn sanitize_branch_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => c,
+        })
+        .collect()
 }
