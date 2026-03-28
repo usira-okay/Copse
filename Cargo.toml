@@ -1,0 +1,11 @@
+[package]
+name = "copse"
+version = "0.1.0"
+edition = "2024"
+description = "A CLI tool to quickly control git worktree"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.0", features = ["derive"] }
+console = "0.16.3"
+dialoguer = { version = "0.12.0", features = ["fuzzy-select"] }
