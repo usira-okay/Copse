@@ -1,3 +1,5 @@
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
 # Copse
 
 A CLI tool to quickly control [git worktree](https://git-scm.com/docs/git-worktree) with interactive prompts and arrow-key navigation.
