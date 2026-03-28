@@ -115,6 +115,20 @@ copse_wrapper() {
 alias cps='copse_wrapper'
 ```
 
+PowerShell 包裝腳本範例：
+
+```powershell
+function Invoke-Copse {
+  $output = & copse @args
+  $output | Write-Output
+  $cdLine = $output | Select-String '^COPSE_CD:(.+)$' | Select-Object -Last 1
+  if ($cdLine) {
+    Set-Location $cdLine.Matches.Groups[1].Value
+  }
+}
+Set-Alias -Name cps -Value Invoke-Copse
+```
+
 ## 需求
 
 - Git ≥ 2.15（需支援 `git worktree`）

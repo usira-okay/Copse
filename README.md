@@ -115,6 +115,20 @@ copse_wrapper() {
 alias cps='copse_wrapper'
 ```
 
+Example wrapper for PowerShell:
+
+```powershell
+function Invoke-Copse {
+  $output = & copse @args
+  $output | Write-Output
+  $cdLine = $output | Select-String '^COPSE_CD:(.+)$' | Select-Object -Last 1
+  if ($cdLine) {
+    Set-Location $cdLine.Matches.Groups[1].Value
+  }
+}
+Set-Alias -Name cps -Value Invoke-Copse
+```
+
 ## Requirements
 
 - Git ≥ 2.15 (for `git worktree` support)
