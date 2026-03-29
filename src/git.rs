@@ -600,6 +600,16 @@ pub fn strip_unc_prefix(path: &str) -> &str {
     path.strip_prefix(r"\\?\").unwrap_or(path)
 }
 
+/// Strip UNC prefix from a `PathBuf`, returning a cleaned `PathBuf`.
+pub fn strip_unc_prefix_path(path: PathBuf) -> PathBuf {
+    let s = path.display().to_string();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
+}
+
 /// Copy untracked files from source worktree to current directory.
 pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
     let output = Command::new("git")

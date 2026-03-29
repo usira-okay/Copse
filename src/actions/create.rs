@@ -167,9 +167,8 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
 fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBuf {
     // Try to compute a relative path; strip UNC prefix that canonicalize
     // may produce on Windows so the component comparison works correctly.
-    let base_canon = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
-    let base_str = base_canon.display().to_string();
-    let base = PathBuf::from(git::strip_unc_prefix(&base_str));
+    let base = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    let base = git::strip_unc_prefix_path(base);
     let target_abs = if target.is_absolute() {
         target.to_path_buf()
     } else {
