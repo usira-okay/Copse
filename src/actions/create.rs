@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, FuzzySelect, Input, Select};
 use std::path::PathBuf;
@@ -6,14 +6,6 @@ use std::path::PathBuf;
 use crate::git;
 
 pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
-    // Move to main worktree before processing
-    let main_wt_path = git::get_main_worktree_path(verbose)?;
-    std::env::set_current_dir(&main_wt_path)
-        .with_context(|| format!("Failed to change directory to main worktree: {}", main_wt_path.display()))?;
-    if verbose {
-        eprintln!("[DEBUG] Changed directory to main worktree: {}", main_wt_path.display());
-    }
-
     // Get all refs (branches and tags)
     let refs = git::get_all_refs(verbose)?;
     if refs.is_empty() {

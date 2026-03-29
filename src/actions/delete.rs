@@ -23,14 +23,6 @@ pub fn run(verbose: bool) -> Result<()> {
         eprintln!("[DEBUG] Original working directory: {}", original_dir.display());
     }
 
-    // Move to main worktree before processing
-    let main_wt_path = git::get_main_worktree_path(verbose)?;
-    std::env::set_current_dir(&main_wt_path)
-        .with_context(|| format!("Failed to change directory to main worktree: {}", main_wt_path.display()))?;
-    if verbose {
-        eprintln!("[DEBUG] Changed directory to main worktree: {}", main_wt_path.display());
-    }
-
     let worktrees = git::list_worktrees(verbose)?;
 
     // Filter out the main worktree and the worktree matching the original
