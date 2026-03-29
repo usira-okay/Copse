@@ -5,6 +5,17 @@ use dialoguer::{Confirm, MultiSelect, Select};
 use crate::git;
 
 pub fn run(verbose: bool) -> Result<()> {
+    // Capture the original working directory before switching to main worktree
+    let original_dir = std::env::current_dir()
+        .context("Failed to get current directory")?;
+    let original_dir = std::fs::canonicalize(&original_dir)
+        .unwrap_or(original_dir);
+    let original_dir = git::strip_unc_prefix_path(original_dir);
+
+    if verbose {
+        eprintln!("[DEBUG] Original working directory: {}", original_dir.display());
+    }
+
     // Move to main worktree before processing
     let main_wt_path = git::get_main_worktree_path(verbose)?;
     std::env::set_current_dir(&main_wt_path)
@@ -15,8 +26,30 @@ pub fn run(verbose: bool) -> Result<()> {
 
     let worktrees = git::list_worktrees(verbose)?;
 
-    // Filter out the main worktree - it cannot be removed
-    let removable: Vec<_> = worktrees.iter().filter(|wt| !wt.is_main).collect();
+    // Filter out the main worktree and the worktree matching the original
+    // working directory — neither should be deletable.
+    let removable: Vec<_> = worktrees
+        .iter()
+        .filter(|wt| {
+            if wt.is_main {
+                return false;
+            }
+            // Check if this worktree matches the original working directory
+            let wt_path = std::fs::canonicalize(&wt.path)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&wt.path));
+            let wt_path = git::strip_unc_prefix_path(wt_path);
+            if wt_path == original_dir || original_dir.starts_with(&wt_path) {
+                if verbose {
+                    eprintln!(
+                        "[DEBUG] Skipping current worktree from deletion list: {}",
+                        wt.path
+                    );
+                }
+                return false;
+            }
+            true
+        })
+        .collect();
 
     if removable.is_empty() {
         println!(
