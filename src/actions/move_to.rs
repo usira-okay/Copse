@@ -1,6 +1,6 @@
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Select};
+use dialoguer::Select;
 
 use crate::git;
 
@@ -42,22 +42,6 @@ pub fn run(verbose: bool) -> Result<()> {
     };
 
     let selected = &worktrees[selection];
-
-    println!(
-        "Selected worktree: {} [{}]",
-        style(&selected.path).cyan().bold(),
-        style(&selected.branch).green()
-    );
-
-    let confirmed = Confirm::new()
-        .with_prompt(format!("Move to worktree at '{}'?", selected.path))
-        .default(true)
-        .interact()?;
-
-    if !confirmed {
-        println!("{}", style("Operation cancelled.").yellow());
-        return Ok(());
-    }
 
     let target = std::fs::canonicalize(&selected.path)
         .unwrap_or_else(|_| std::path::PathBuf::from(&selected.path));

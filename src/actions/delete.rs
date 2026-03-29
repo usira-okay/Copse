@@ -112,10 +112,10 @@ pub fn run(verbose: bool) -> Result<()> {
 
     // Choose delete option
     let delete_options = vec![
-        "Delete worktree(s) but keep branch(es)",
-        "Force delete worktree(s) but keep branch(es)",
-        "Delete worktree(s) and delete branch(es)",
-        "Force delete worktree(s) and delete branch(es)",
+        "🗑️  Delete worktree(s) but keep branch(es)",
+        "⚡ Force delete worktree(s) but keep branch(es)",
+        "🗑️🌿 Delete worktree(s) and delete branch(es)",
+        "⚡🌿 Force delete worktree(s) and delete branch(es)",
     ];
 
     let delete_choice = Select::new()
@@ -185,6 +185,26 @@ pub fn run(verbose: bool) -> Result<()> {
             style("This will also delete the associated branch(es).").yellow()
         );
     }
+
+    // Build a detailed confirmation prompt
+    let branch_list: Vec<String> = selected_worktrees
+        .iter()
+        .map(|wt| {
+            if wt.branch.is_empty() {
+                format!("  {} (detached HEAD)", wt.path)
+            } else {
+                format!("  {} [{}]", wt.path, wt.branch)
+            }
+        })
+        .collect();
+    let method_desc = &delete_options[delete_choice];
+    println!(
+        "\n{}\n{}\n{} {}",
+        style("Worktrees to delete:").bold(),
+        branch_list.join("\n"),
+        style("Method:").bold(),
+        method_desc,
+    );
 
     let confirmed = Confirm::new()
         .with_prompt("Are you sure you want to proceed?")

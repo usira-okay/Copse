@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use console::style;
-use dialoguer::{Confirm, FuzzySelect, Input, Select};
+use dialoguer::{FuzzySelect, Input, Select};
 use std::path::PathBuf;
 
 use crate::git;
@@ -35,8 +35,8 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
 
     // Ask user whether to create worktree directly or create a new branch first
     let create_options = vec![
-        "Create worktree directly from the selected ref",
-        "Create a new branch from the selected ref, then create worktree",
+        "🌿 Create a new branch from the selected ref, then create worktree",
+        "📂 Create worktree directly from the selected ref",
     ];
 
     let create_choice = Select::new()
@@ -54,7 +54,7 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
     };
 
     // Determine the branch name for the worktree path
-    let (branch_name, new_branch_name) = if create_choice == 1 {
+    let (branch_name, new_branch_name) = if create_choice == 0 {
         // User wants to create a new branch
         let new_name: String = Input::new()
             .with_prompt("Enter the new branch name")
@@ -130,27 +130,20 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         );
     }
 
-    // Ask if user wants to move to the new worktree
-    let move_to = Confirm::new()
-        .with_prompt("Do you want to move to the new worktree?")
-        .default(true)
-        .interact()?;
-
-    if move_to {
-        let target = std::fs::canonicalize(&worktree_path).unwrap_or(worktree_path.clone());
-        let target_str = target.display().to_string();
-        let target_str = git::strip_unc_prefix(&target_str);
-        println!(
-            "{}",
-            style(format!(
-                "To move to the new worktree, run:\n  cd {}",
-                target_str
-            ))
-            .cyan()
-        );
-        // Print the path so shell wrapper scripts can use it
-        println!("COPSE_CD:{}", target_str);
-    }
+    // Automatically move to the new worktree
+    let target = std::fs::canonicalize(&worktree_path).unwrap_or(worktree_path.clone());
+    let target_str = target.display().to_string();
+    let target_str = git::strip_unc_prefix(&target_str);
+    println!(
+        "{}",
+        style(format!(
+            "To move to the new worktree, run:\n  cd {}",
+            target_str
+        ))
+        .cyan()
+    );
+    // Print the path so shell wrapper scripts can use it
+    println!("COPSE_CD:{}", target_str);
 
     Ok(())
 }

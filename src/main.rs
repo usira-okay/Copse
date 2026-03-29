@@ -36,10 +36,15 @@ fn main() -> Result<()> {
     }
 
     // Select action
-    let actions = vec!["create", "delete", "move-to", "copy-changes"];
+    let action_labels = vec![
+        "📂 create",
+        "🗑️  delete",
+        "📍 move-to",
+        "📋 copy-changes",
+    ];
     let selection = Select::new()
         .with_prompt("Select an action")
-        .items(&actions)
+        .items(&action_labels)
         .default(0)
         .interact_opt()?;
 
@@ -51,11 +56,11 @@ fn main() -> Result<()> {
         }
     };
 
-    match actions[selection] {
-        "create" => actions::create::run(cli.verbose, cli.absolute_path)?,
-        "delete" => actions::delete::run(cli.verbose)?,
-        "move-to" => actions::move_to::run(cli.verbose)?,
-        "copy-changes" => actions::copy_changes::run(cli.verbose)?,
+    match selection {
+        0 => actions::create::run(cli.verbose, cli.absolute_path)?,
+        1 => actions::delete::run(cli.verbose)?,
+        2 => actions::move_to::run(cli.verbose)?,
+        3 => actions::copy_changes::run(cli.verbose)?,
         _ => unreachable!(),
     }
 
