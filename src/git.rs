@@ -593,6 +593,13 @@ pub fn apply_diff_with_fallback(diff: &str, verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// Strip UNC extended-length path prefix (\\?\) that `std::fs::canonicalize`
+/// produces on Windows. PowerShell's Set-Location and many other tools do not
+/// support these paths.
+pub fn strip_unc_prefix(path: &str) -> &str {
+    path.strip_prefix(r"\\?\").unwrap_or(path)
+}
+
 /// Copy untracked files from source worktree to current directory.
 pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
     let output = Command::new("git")

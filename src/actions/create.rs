@@ -146,16 +146,18 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
 
     if move_to {
         let target = std::fs::canonicalize(&worktree_path).unwrap_or(worktree_path.clone());
+        let target_str = target.display().to_string();
+        let target_str = git::strip_unc_prefix(&target_str);
         println!(
             "{}",
             style(format!(
                 "To move to the new worktree, run:\n  cd {}",
-                target.display()
+                target_str
             ))
             .cyan()
         );
         // Print the path so shell wrapper scripts can use it
-        println!("COPSE_CD:{}", target.display());
+        println!("COPSE_CD:{}", target_str);
     }
 
     Ok(())
@@ -163,8 +165,11 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
 
 /// Compute a relative path from `base` to `target`.
 fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBuf {
-    // Try to compute a relative path
-    let base = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    // Try to compute a relative path; strip UNC prefix that canonicalize
+    // may produce on Windows so the component comparison works correctly.
+    let base_canon = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    let base_str = base_canon.display().to_string();
+    let base = PathBuf::from(git::strip_unc_prefix(&base_str));
     let target_abs = if target.is_absolute() {
         target.to_path_buf()
     } else {
