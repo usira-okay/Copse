@@ -8,8 +8,15 @@ pub fn run(verbose: bool) -> Result<()> {
     // Capture the original working directory before switching to main worktree
     let original_dir = std::env::current_dir()
         .context("Failed to get current directory")?;
-    let original_dir = std::fs::canonicalize(&original_dir)
-        .unwrap_or(original_dir);
+    let original_dir = match std::fs::canonicalize(&original_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            if verbose {
+                eprintln!("[DEBUG] Could not canonicalize original dir {:?}: {}", original_dir, e);
+            }
+            original_dir
+        }
+    };
     let original_dir = git::strip_unc_prefix_path(original_dir);
 
     if verbose {
@@ -35,8 +42,18 @@ pub fn run(verbose: bool) -> Result<()> {
                 return false;
             }
             // Check if this worktree matches the original working directory
-            let wt_path = std::fs::canonicalize(&wt.path)
-                .unwrap_or_else(|_| std::path::PathBuf::from(&wt.path));
+            let wt_path = match std::fs::canonicalize(&wt.path) {
+                Ok(p) => p,
+                Err(e) => {
+                    if verbose {
+                        eprintln!(
+                            "[DEBUG] Could not canonicalize worktree path {}: {}",
+                            wt.path, e
+                        );
+                    }
+                    std::path::PathBuf::from(&wt.path)
+                }
+            };
             let wt_path = git::strip_unc_prefix_path(wt_path);
             if wt_path == original_dir || original_dir.starts_with(&wt_path) {
                 if verbose {
