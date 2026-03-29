@@ -112,8 +112,8 @@ pub fn run(verbose: bool) -> Result<()> {
 
     // Choose delete option
     let delete_options = vec![
-        "🗑️  Delete worktree(s) but keep branch(es)",
-        "⚡ Force delete worktree(s) but keep branch(es)",
+        "🗑️   Delete worktree(s) but keep branch(es)",
+        "⚡  Force delete worktree(s) but keep branch(es)",
         "🗑️🌿 Delete worktree(s) and delete branch(es)",
         "⚡🌿 Force delete worktree(s) and delete branch(es)",
     ];

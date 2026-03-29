@@ -35,8 +35,8 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
 
     // Ask user whether to create worktree directly or create a new branch first
     let create_options = vec![
-        "🌿 Create a new branch from the selected ref, then create worktree",
-        "📂 Create worktree directly from the selected ref",
+        "🌿  Create a new branch from the selected ref, then create worktree",
+        "📂  Create worktree directly from the selected ref",
     ];
 
     let create_choice = Select::new()

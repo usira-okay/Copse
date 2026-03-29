@@ -37,10 +37,10 @@ fn main() -> Result<()> {
 
     // Select action
     let action_labels = vec![
-        "📂 create",
+        "📂  create",
         "🗑️  delete",
-        "📍 move-to",
-        "📋 copy-changes",
+        "📍  move-to",
+        "📋  copy-changes",
     ];
     let selection = Select::new()
         .with_prompt("Select an action")
