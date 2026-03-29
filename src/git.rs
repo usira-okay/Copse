@@ -38,6 +38,16 @@ pub fn get_repo_name() -> Result<String> {
     Ok(name)
 }
 
+/// Get the path of the main worktree.
+pub fn get_main_worktree_path(verbose: bool) -> Result<PathBuf> {
+    let worktrees = list_worktrees(verbose)?;
+    let main_wt = worktrees
+        .into_iter()
+        .find(|wt| wt.is_main)
+        .context("Could not find main worktree")?;
+    Ok(PathBuf::from(main_wt.path))
+}
+
 /// Represents a branch or tag reference.
 #[derive(Debug, Clone)]
 pub struct GitRef {

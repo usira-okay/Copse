@@ -1,10 +1,18 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{Confirm, MultiSelect, Select};
 
 use crate::git;
 
 pub fn run(verbose: bool) -> Result<()> {
+    // Move to main worktree before processing
+    let main_wt_path = git::get_main_worktree_path(verbose)?;
+    std::env::set_current_dir(&main_wt_path)
+        .with_context(|| format!("Failed to change directory to main worktree: {}", main_wt_path.display()))?;
+    if verbose {
+        eprintln!("[DEBUG] Changed directory to main worktree: {}", main_wt_path.display());
+    }
+
     let worktrees = git::list_worktrees(verbose)?;
 
     // Filter out the main worktree - it cannot be removed
