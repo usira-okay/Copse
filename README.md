@@ -41,10 +41,10 @@ You will be presented with an interactive menu to select an action:
 
 ```
 Select an action:
-> create
-  delete
-  move-to
-  copy-changes
+> 📂  create
+  🗑️   delete
+  📍  move-to
+  📋  copy-changes
 ```
 
 ### Options
@@ -65,27 +65,29 @@ copse -a
 
 1. Select a branch or tag (with fuzzy search)
    - Sorted by: local branches → remote branches → local tags → remote tags
-2. Choose to create the worktree directly, or create a new branch first
+2. Choose how to create the worktree:
+   - 🌿 Create a new branch from the selected ref, then create worktree (default)
+   - 📂 Create worktree directly from the selected ref
 3. The worktree is created at `../<repoName>-worktree/<branch_name>`
    - Example: repo at `~/ProjectA` with branch `feature-1` → `~/ProjectA-worktree/feature-1`
-4. Optionally move to the new worktree after creation
+4. Automatically moves to the new worktree after creation
 
 #### delete
 
 1. Multi-select worktrees to delete (Space to toggle, Enter to confirm)
+   - The main worktree and your current working directory worktree are excluded from the list
 2. Choose a deletion mode:
-   - Delete worktree but keep branch
-   - Force delete worktree but keep branch
-   - Delete worktree and delete branch
-   - Force delete worktree and delete branch
+   - 🗑️ Delete worktree(s) but keep branch(es)
+   - ⚡ Force delete worktree(s) but keep branch(es)
+   - 🗑️🌿 Delete worktree(s) and delete branch(es)
+   - ⚡🌿 Force delete worktree(s) and delete branch(es)
 3. Warnings are shown for worktrees with uncommitted changes
-4. Confirmation is required before proceeding
+4. Confirmation prompt displays the selected worktrees/branches and the chosen deletion method
 
 #### move-to
 
 1. Select a worktree from the list
-2. Confirm the move
-3. Outputs a `cd` command (and `COPSE_CD:<path>` for shell integration)
+2. Immediately moves to the selected worktree (outputs `COPSE_CD:<path>` for shell integration)
 
 #### copy-changes
 

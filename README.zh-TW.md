@@ -41,10 +41,10 @@ copse
 
 ```
 Select an action:
-> create
-  delete
-  move-to
-  copy-changes
+> 📂  create
+  🗑️   delete
+  📍  move-to
+  📋  copy-changes
 ```
 
 ### 選項
@@ -65,27 +65,29 @@ copse -a
 
 1. 選擇分支或標籤（支援模糊搜尋）
    - 排序：本地分支 → 遠端分支 → 本地標籤 → 遠端標籤
-2. 選擇直接建立 worktree，或先建立新分支
+2. 選擇建立方式：
+   - 🌿 從選取的 ref 建立新分支，再建立 worktree（預設）
+   - 📂 直接從選取的 ref 建立 worktree
 3. Worktree 建立於 `../<repoName>-worktree/<branch_name>`
    - 範例：儲存庫位於 `~/ProjectA`，分支 `feature-1` → `~/ProjectA-worktree/feature-1`
-4. 建立後可選擇是否切換到新的 worktree
+4. 建立後自動切換到新的 worktree
 
 #### delete
 
 1. 多選要刪除的 worktree（空白鍵切換選取，Enter 確認）
+   - 主 worktree 和目前工作目錄所在的 worktree 會自動排除
 2. 選擇刪除模式：
-   - 刪除 worktree，保留分支
-   - 強制刪除 worktree，保留分支
-   - 刪除 worktree 並刪除分支
-   - 強制刪除 worktree 並刪除分支
+   - 🗑️ 刪除 worktree，保留分支
+   - ⚡ 強制刪除 worktree，保留分支
+   - 🗑️🌿 刪除 worktree 並刪除分支
+   - ⚡🌿 強制刪除 worktree 並刪除分支
 3. 若 worktree 有未提交的變更會顯示警告
-4. 執行前需要確認
+4. 確認提示會列出選取的 worktree/分支以及刪除方式
 
 #### move-to
 
 1. 從清單中選擇一個 worktree
-2. 確認切換
-3. 輸出 `cd` 指令（以及供 shell 包裝腳本使用的 `COPSE_CD:<path>`）
+2. 選擇後直接切換到該 worktree（輸出 `COPSE_CD:<path>` 供 shell 包裝腳本使用）
 
 #### copy-changes
 
