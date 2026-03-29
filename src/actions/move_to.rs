@@ -62,16 +62,17 @@ pub fn run(verbose: bool) -> Result<()> {
     let target = std::fs::canonicalize(&selected.path)
         .unwrap_or_else(|_| std::path::PathBuf::from(&selected.path));
 
+    // On Windows, std::fs::canonicalize returns UNC extended-length paths (\\?\...)
+    // which PowerShell's Set-Location does not support. Strip the prefix.
+    let target_str = target.display().to_string();
+    let target_str = target_str.strip_prefix(r"\\?\").unwrap_or(&target_str);
+
     println!(
         "{}",
-        style(format!(
-            "To move to the worktree, run:\n  cd {}",
-            target.display()
-        ))
-        .cyan()
+        style(format!("To move to the worktree, run:\n  cd {}", target_str)).cyan()
     );
     // Print the path so shell wrapper scripts can use it
-    println!("COPSE_CD:{}", target.display());
+    println!("COPSE_CD:{}", target_str);
 
     Ok(())
 }
