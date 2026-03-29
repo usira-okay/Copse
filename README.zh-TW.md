@@ -26,15 +26,15 @@ cargo install --path .
 git clone https://github.com/usira-okay/Copse.git
 cd Copse
 cargo build --release
-# 執行檔位於 target/release/copse
+# 執行檔位於 target/release/git_worktree_copse
 ```
 
 ## 使用方式
 
-在任何 git 儲存庫內執行 `copse`：
+在任何 git 儲存庫內執行 `git_worktree_copse`：
 
 ```bash
-copse
+git_worktree_copse
 ```
 
 會出現互動式選單讓你選擇操作：
@@ -55,8 +55,8 @@ Select an action:
 | `--absolute-path` | `-a` | 建立 worktree 時使用絕對路徑（預設：相對路徑） |
 
 ```bash
-copse --verbose
-copse -a
+git_worktree_copse --verbose
+git_worktree_copse -a
 ```
 
 ### 操作
@@ -99,14 +99,14 @@ copse -a
 
 ### Shell 整合
 
-`copse` 無法直接變更 shell 的工作目錄。`move-to` 和 `create` 操作會輸出 `COPSE_CD:<path>` 行，供 shell 包裝腳本使用。
+`git_worktree_copse` 無法直接變更 shell 的工作目錄。`move-to` 和 `create` 操作會輸出 `COPSE_CD:<path>` 行，供 shell 包裝腳本使用。
 
 Bash/Zsh 包裝腳本範例：
 
 ```bash
 copse_wrapper() {
   local output
-  output=$(copse "$@")
+  output=$(git_worktree_copse "$@")
   echo "$output"
   local cd_line
   cd_line=$(echo "$output" | grep '^COPSE_CD:' | tail -1)
@@ -121,7 +121,7 @@ PowerShell 包裝腳本範例：
 
 ```powershell
 function Invoke-Copse {
-  $output = & copse @args
+  $output = & git_worktree_copse @args
   $output | Write-Output
   $cdLine = $output | Select-String '^COPSE_CD:(.+)$' | Select-Object -Last 1
   if ($cdLine) {

@@ -26,15 +26,15 @@ cargo install --path .
 git clone https://github.com/usira-okay/Copse.git
 cd Copse
 cargo build --release
-# Binary is at target/release/copse
+# Binary is at target/release/git_worktree_copse
 ```
 
 ## Usage
 
-Run `copse` inside any git repository:
+Run `git_worktree_copse` inside any git repository:
 
 ```bash
-copse
+git_worktree_copse
 ```
 
 You will be presented with an interactive menu to select an action:
@@ -55,8 +55,8 @@ Select an action:
 | `--absolute-path` | `-a` | Use absolute paths when creating worktrees (default: relative) |
 
 ```bash
-copse --verbose
-copse -a
+git_worktree_copse --verbose
+git_worktree_copse -a
 ```
 
 ### Actions
@@ -99,14 +99,14 @@ copse -a
 
 ### Shell integration
 
-`copse` cannot change the shell's working directory directly. The `move-to` and `create` actions output a `COPSE_CD:<path>` line that a shell wrapper can use.
+`git_worktree_copse` cannot change the shell's working directory directly. The `move-to` and `create` actions output a `COPSE_CD:<path>` line that a shell wrapper can use.
 
 Example wrapper for Bash/Zsh:
 
 ```bash
 copse_wrapper() {
   local output
-  output=$(copse "$@")
+  output=$(git_worktree_copse "$@")
   echo "$output"
   local cd_line
   cd_line=$(echo "$output" | grep '^COPSE_CD:' | tail -1)
@@ -121,7 +121,7 @@ Example wrapper for PowerShell:
 
 ```powershell
 function Invoke-Copse {
-  $output = & copse @args
+  $output = & git_worktree_copse @args
   $output | Write-Output
   $cdLine = $output | Select-String '^COPSE_CD:(.+)$' | Select-Object -Last 1
   if ($cdLine) {
