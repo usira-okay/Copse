@@ -1,8 +1,13 @@
 [package]
-name = "copse"
+name = "git_worktree_copse"
 version = "0.1.0"
 edition = "2024"
 description = "A CLI tool to quickly control git worktree"
+license = "Apache-2.0"
+repository = "https://github.com/usira-okay/Copse"
+readme = "README.md"
+keywords = ["git", "worktree", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1.0.102"
