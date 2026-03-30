@@ -42,7 +42,7 @@ You will be presented with an interactive menu to select an action:
 ```
 Select an action:
 > 📂  create
-  🗑️   delete
+  🗑️  delete
   📍  move-to
   📋  copy-changes
 ```

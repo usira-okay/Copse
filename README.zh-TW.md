@@ -42,7 +42,7 @@ git_worktree_copse
 ```
 Select an action:
 > 📂  create
-  🗑️   delete
+  🗑️  delete
   📍  move-to
   📋  copy-changes
 ```
