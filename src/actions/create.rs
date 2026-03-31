@@ -85,6 +85,11 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/"));
+    // Canonicalize parent_dir so path components are consistent with the
+    // canonicalized base used inside pathdiff_relative.
+    let parent_dir = std::fs::canonicalize(&parent_dir)
+        .map(git::strip_unc_prefix_path)
+        .unwrap_or(parent_dir);
 
     // Sanitize branch name for use as a directory name
     let sanitized_branch = sanitize_branch_name(&branch_name);
@@ -105,15 +110,9 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         style(display_path.display()).cyan().bold()
     );
 
-    // Actually create the worktree (always use absolute path for git commands)
-    let actual_path = if absolute_path {
-        worktree_path.clone()
-    } else {
-        display_path.clone()
-    };
-
+    // Always pass the absolute path to git commands, regardless of the display preference.
     if let Some(ref new_branch) = new_branch_name {
-        git::create_worktree_new_branch(&actual_path, new_branch, &selected_ref.name, verbose)?;
+        git::create_worktree_new_branch(&worktree_path, new_branch, &selected_ref.name, verbose)?;
         println!(
             "{}",
             style(format!(
@@ -123,7 +122,7 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
             .green()
         );
     } else {
-        git::create_worktree(&actual_path, &selected_ref.name, verbose)?;
+        git::create_worktree(&worktree_path, &selected_ref.name, verbose)?;
         println!(
             "{}",
             style(format!("Created worktree for '{}'", selected_ref.name)).green()
