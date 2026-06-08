@@ -209,70 +209,57 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn make_temp_repo_root(repo_name: &str) -> PathBuf {
+    fn make_temp_repo_root(repo_name: &str) -> (PathBuf, PathBuf) {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let repo_root = std::env::temp_dir()
-            .join(format!("copse-test-{unique}"))
-            .join(repo_name);
+        let temp_root = std::env::temp_dir().join(format!("copse-test-{unique}"));
+        let repo_root = temp_root.join(repo_name);
         std::fs::create_dir_all(&repo_root).unwrap();
-        repo_root
+        (temp_root, repo_root)
     }
 
     #[test]
     fn builds_worktree_path_under_worktree_directory() {
-        let repo_root = make_temp_repo_root("ProjectA");
+        let (temp_root, repo_root) = make_temp_repo_root("ProjectA");
 
         let path = build_worktree_path(&repo_root, "ProjectA", "feature-1");
 
         assert_eq!(
             path,
-            repo_root
-                .parent()
-                .unwrap()
-                .join("worktree")
-                .join("ProjectA")
-                .join("feature-1")
+            temp_root.join("worktree").join("ProjectA").join("feature-1")
         );
 
-        std::fs::remove_dir_all(repo_root.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(temp_root).unwrap();
     }
 
     #[test]
     fn sanitizes_branch_name_in_worktree_path() {
-        let repo_root = make_temp_repo_root("ProjectA");
+        let (temp_root, repo_root) = make_temp_repo_root("ProjectA");
 
         let path = build_worktree_path(&repo_root, "ProjectA", "feature/test:1");
 
         assert_eq!(
             path,
-            repo_root
-                .parent()
-                .unwrap()
+            temp_root
                 .join("worktree")
                 .join("ProjectA")
                 .join("feature_test_1")
         );
 
-        std::fs::remove_dir_all(repo_root.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(temp_root).unwrap();
     }
 
     #[test]
     fn computes_relative_path_for_nested_worktree_directory() {
-        let repo_root = make_temp_repo_root("ProjectA");
-        let worktree_path = repo_root
-            .parent()
-            .unwrap()
-            .join("worktree")
-            .join("ProjectA")
-            .join("feature-1");
+        let (temp_root, repo_root) = make_temp_repo_root("ProjectA");
+        let worktree_path = temp_root.join("worktree").join("ProjectA").join("feature-1");
 
         let relative = pathdiff_relative(&repo_root, &worktree_path);
 
         assert_eq!(relative, PathBuf::from("../worktree/ProjectA/feature-1"));
 
-        std::fs::remove_dir_all(repo_root.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(temp_root).unwrap();
     }
 }
