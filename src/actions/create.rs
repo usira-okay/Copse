@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{FuzzySelect, Input, Select};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::git;
 
@@ -78,24 +78,10 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         (folder_name, None)
     };
 
-    // Compute the worktree path: ../{repoName}-worktree/{branch_name}
+    // Compute the worktree path: ../worktree/{repoName}/{branch_name}
     let repo_name = git::get_repo_name()?;
     let repo_root = git::get_repo_root()?;
-    let parent_dir = repo_root
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("/"));
-    // Canonicalize parent_dir so path components are consistent with the
-    // canonicalized base used inside pathdiff_relative.
-    let parent_dir = std::fs::canonicalize(&parent_dir)
-        .map(git::strip_unc_prefix_path)
-        .unwrap_or(parent_dir);
-
-    // Sanitize branch name for use as a directory name
-    let sanitized_branch = sanitize_branch_name(&branch_name);
-
-    let worktree_base = parent_dir.join(format!("{}-worktree", repo_name));
-    let worktree_path = worktree_base.join(&sanitized_branch);
+    let worktree_path = build_worktree_path(&repo_root, &repo_name, &branch_name);
 
     // Determine the path to use (relative or absolute)
     let display_path = if absolute_path {
@@ -189,6 +175,23 @@ fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBu
     }
 }
 
+fn build_worktree_path(repo_root: &Path, repo_name: &str, branch_name: &str) -> PathBuf {
+    let parent_dir = repo_root
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"));
+    // Canonicalize parent_dir so path components are consistent with the
+    // canonicalized base used inside pathdiff_relative.
+    let parent_dir = std::fs::canonicalize(&parent_dir)
+        .map(git::strip_unc_prefix_path)
+        .unwrap_or(parent_dir);
+
+    parent_dir
+        .join("worktree")
+        .join(repo_name)
+        .join(sanitize_branch_name(branch_name))
+}
+
 /// Sanitize a branch name for use as a directory name.
 /// Replaces characters that are problematic on various filesystems.
 fn sanitize_branch_name(name: &str) -> String {
@@ -198,4 +201,38 @@ fn sanitize_branch_name(name: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_worktree_path, pathdiff_relative};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn builds_worktree_path_under_worktree_directory() {
+        let repo_root = Path::new("/tmp/ProjectA");
+
+        let path = build_worktree_path(repo_root, "ProjectA", "feature-1");
+
+        assert_eq!(path, PathBuf::from("/tmp/worktree/ProjectA/feature-1"));
+    }
+
+    #[test]
+    fn sanitizes_branch_name_in_worktree_path() {
+        let repo_root = Path::new("/tmp/ProjectA");
+
+        let path = build_worktree_path(repo_root, "ProjectA", "feature/test:1");
+
+        assert_eq!(path, PathBuf::from("/tmp/worktree/ProjectA/feature_test_1"));
+    }
+
+    #[test]
+    fn computes_relative_path_for_nested_worktree_directory() {
+        let repo_root = Path::new("/tmp/ProjectA");
+        let worktree_path = Path::new("/tmp/worktree/ProjectA/feature-1");
+
+        let relative = pathdiff_relative(repo_root, worktree_path);
+
+        assert_eq!(relative, PathBuf::from("../worktree/ProjectA/feature-1"));
+    }
 }
