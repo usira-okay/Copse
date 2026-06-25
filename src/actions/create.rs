@@ -81,7 +81,8 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
     // Compute the worktree path: ../worktree/{repoName}/{branch_name}
     let repo_name = git::get_repo_name()?;
     let repo_root = git::get_repo_root()?;
-    let worktree_path = build_worktree_path(&repo_root, &repo_name, &branch_name);
+    let main_worktree_root = git::get_main_worktree_root(&repo_root)?;
+    let worktree_path = build_worktree_path(&main_worktree_root, &repo_name, &branch_name);
 
     // Determine the path to use (relative or absolute)
     let display_path = if absolute_path {
@@ -228,7 +229,10 @@ mod tests {
 
         assert_eq!(
             path,
-            temp_root.join("worktree").join("ProjectA").join("feature-1")
+            temp_root
+                .join("worktree")
+                .join("ProjectA")
+                .join("feature-1")
         );
 
         std::fs::remove_dir_all(temp_root).unwrap();
@@ -254,7 +258,10 @@ mod tests {
     #[test]
     fn computes_relative_path_for_nested_worktree_directory() {
         let (temp_root, repo_root) = make_temp_repo_root("ProjectA");
-        let worktree_path = temp_root.join("worktree").join("ProjectA").join("feature-1");
+        let worktree_path = temp_root
+            .join("worktree")
+            .join("ProjectA")
+            .join("feature-1");
 
         let relative = pathdiff_relative(&repo_root, &worktree_path);
 

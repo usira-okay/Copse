@@ -27,6 +27,47 @@ pub fn get_repo_root() -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
+/// Get the primary worktree root for the repository.
+///
+/// When invoked from a linked worktree, this resolves to the root of the main
+/// checkout so worktree folders stay anchored to the original repository path.
+pub fn get_main_worktree_root(repo_root: &Path) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &repo_root.to_string_lossy(),
+            "rev-parse",
+            "--git-common-dir",
+        ])
+        .output()
+        .context("Failed to run git rev-parse --git-common-dir")?;
+    if !output.status.success() {
+        bail!("Not inside a git repository");
+    }
+
+    let path = String::from_utf8(output.stdout)
+        .context("Invalid UTF-8 in git output")?
+        .trim()
+        .to_string();
+    let path = PathBuf::from(path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        repo_root.join(&path)
+    };
+
+    let path = std::fs::canonicalize(&path)
+        .with_context(|| format!("Failed to canonicalize git common dir {:?}", path))?;
+    if path.file_name() == Some(std::ffi::OsStr::new(".git")) {
+        match path.parent() {
+            Some(parent) => Ok(parent.to_path_buf()),
+            None => Ok(path),
+        }
+    } else {
+        Ok(path)
+    }
+}
+
 /// Get the repository name from the repo root path.
 pub fn get_repo_name() -> Result<String> {
     let root = get_repo_root()?;
@@ -633,4 +674,81 @@ pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_main_worktree_root;
+    use std::path::Path;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("failed to run git")
+    }
+
+    #[test]
+    fn test_get_main_worktree_root_from_linked_worktree() {
+        let temp_dir = tempdir().unwrap();
+        let repo_root = temp_dir.path().join("repoA");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        let init_output = run_git(&repo_root, &["init"]);
+        assert!(
+            init_output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&init_output.stderr)
+        );
+
+        let config_output = run_git(&repo_root, &["config", "user.name", "Test User"]);
+        assert!(
+            config_output.status.success(),
+            "git config user.name failed: {}",
+            String::from_utf8_lossy(&config_output.stderr)
+        );
+        let email_output = run_git(&repo_root, &["config", "user.email", "test@example.com"]);
+        assert!(
+            email_output.status.success(),
+            "git config user.email failed: {}",
+            String::from_utf8_lossy(&email_output.stderr)
+        );
+
+        std::fs::write(repo_root.join("README.md"), "hello").unwrap();
+        let add_output = run_git(&repo_root, &["add", "README.md"]);
+        assert!(
+            add_output.status.success(),
+            "git add failed: {}",
+            String::from_utf8_lossy(&add_output.stderr)
+        );
+        let commit_output = run_git(&repo_root, &["commit", "-m", "initial"]);
+        assert!(
+            commit_output.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit_output.stderr)
+        );
+
+        let worktree_root = temp_dir.path().join("worktree");
+        let worktree_output = run_git(
+            &repo_root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                worktree_root.to_str().unwrap(),
+            ],
+        );
+        assert!(
+            worktree_output.status.success(),
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&worktree_output.stderr)
+        );
+
+        let primary_root = get_main_worktree_root(&worktree_root).unwrap();
+        assert_eq!(primary_root, repo_root);
+    }
 }
