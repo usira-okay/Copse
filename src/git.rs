@@ -27,17 +27,6 @@ pub fn get_repo_root() -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Get the repository name from the repo root path.
-pub fn get_repo_name() -> Result<String> {
-    let root = get_repo_root()?;
-    let name = root
-        .file_name()
-        .context("Could not determine repository name")?
-        .to_string_lossy()
-        .to_string();
-    Ok(name)
-}
-
 /// Represents a branch or tag reference.
 #[derive(Debug, Clone)]
 pub struct GitRef {

@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use console::style;
 use dialoguer::{FuzzySelect, Input, Select};
 use std::path::{Path, PathBuf};
@@ -78,17 +78,26 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         (folder_name, None)
     };
 
-    // Compute the worktree path: ../worktree/{repoName}/{branch_name}
-    let repo_name = git::get_repo_name()?;
-    let repo_root = git::get_repo_root()?;
-    let worktree_path = build_worktree_path(&repo_root, &repo_name, &branch_name);
+    // Compute the worktree path: ../worktree/{repoName}/{branch_name}, anchored
+    // to the main worktree so the layout is consistent no matter which
+    // worktree `create` is run from.
+    let main_root = git::get_main_worktree_root(verbose)?;
+    let repo_name = main_root
+        .file_name()
+        .context("Could not determine repository name")?
+        .to_string_lossy()
+        .to_string();
+    let worktree_path = build_worktree_path(&main_root, &repo_name, &branch_name);
 
-    // Determine the path to use (relative or absolute)
+    // Determine the path to use (relative or absolute). The relative display
+    // is computed from the current worktree's root (via `get_repo_root`, not
+    // `main_root`), so the printed `cd` hint is directly usable from wherever
+    // the user is standing (this matches the pre-existing display behavior).
+    let current_worktree_root = git::get_repo_root()?;
     let display_path = if absolute_path {
         worktree_path.clone()
     } else {
-        // Compute relative path from repo root
-        pathdiff_relative(&repo_root, &worktree_path)
+        pathdiff_relative(&current_worktree_root, &worktree_path)
     };
 
     println!(
