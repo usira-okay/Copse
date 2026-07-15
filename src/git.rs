@@ -269,6 +269,12 @@ pub fn list_worktrees(verbose: bool) -> Result<Vec<Worktree>> {
     Ok(worktrees)
 }
 
+/// Find the main worktree (the original repository clone) from a list of
+/// worktrees, regardless of its position in the list.
+fn find_main_worktree(worktrees: &[Worktree]) -> Option<&Worktree> {
+    worktrees.iter().find(|wt| wt.is_main)
+}
+
 /// Create a worktree at the given path for the given branch.
 pub fn create_worktree(path: &Path, branch: &str, verbose: bool) -> Result<()> {
     if verbose {
@@ -633,4 +639,42 @@ pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_main_worktree, Worktree};
+
+    fn make_worktree(path: &str, branch: &str, is_main: bool) -> Worktree {
+        Worktree {
+            path: path.to_string(),
+            branch: branch.to_string(),
+            is_main,
+            is_bare: false,
+        }
+    }
+
+    #[test]
+    fn finds_main_worktree_when_not_first_in_list() {
+        let worktrees = vec![
+            make_worktree("/repo/worktree/feature-a", "feature-a", false),
+            make_worktree("/repo", "main", true),
+            make_worktree("/repo/worktree/feature-b", "feature-b", false),
+        ];
+
+        let main = find_main_worktree(&worktrees).expect("main worktree should be found");
+
+        assert_eq!(main.path, "/repo");
+        assert!(main.is_main);
+    }
+
+    #[test]
+    fn returns_none_when_no_main_worktree_present() {
+        let worktrees = vec![
+            make_worktree("/repo/worktree/feature-a", "feature-a", false),
+            make_worktree("/repo/worktree/feature-b", "feature-b", false),
+        ];
+
+        assert!(find_main_worktree(&worktrees).is_none());
+    }
 }
