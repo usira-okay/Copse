@@ -275,6 +275,14 @@ fn find_main_worktree(worktrees: &[Worktree]) -> Option<&Worktree> {
     worktrees.iter().find(|wt| wt.is_main)
 }
 
+/// Get the root directory of the main worktree (the original repository
+/// clone), regardless of which worktree the command is currently run from.
+pub fn get_main_worktree_root(verbose: bool) -> Result<PathBuf> {
+    let worktrees = list_worktrees(verbose)?;
+    let main = find_main_worktree(&worktrees).context("Could not find main worktree")?;
+    Ok(PathBuf::from(&main.path))
+}
+
 /// Create a worktree at the given path for the given branch.
 pub fn create_worktree(path: &Path, branch: &str, verbose: bool) -> Result<()> {
     if verbose {
