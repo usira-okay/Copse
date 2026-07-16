@@ -136,6 +136,10 @@ Set-Alias -Name cps -Value Invoke-Copse
 - Git ≥ 2.15（需支援 `git worktree`）
 - Rust ≥ 1.85（edition 2024）
 
+## 發布
+
+維護者請參考 [docs/RELEASING.md](docs/RELEASING.md)，內含發布到 crates.io 的一次性環境設定，以及每次發布的步驟。
+
 ## 授權條款
 
 以 [Apache License 2.0](LICENSE) 授權。
