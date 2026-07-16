@@ -69,7 +69,7 @@ git_worktree_copse -a
    - 🌿 Create a new branch from the selected ref, then create worktree (default)
    - 📂 Create worktree directly from the selected ref
 3. The worktree is created at `../worktree/<repoName>/<branch_name>`, always anchored to the
-  **main worktree** (the original clone), regardless of which worktree you run `create` from
+    **main worktree** (the original clone), regardless of which worktree you run `create` from
    - Example: main worktree at `~/ProjectA` with branch `feature-1` → `~/worktree/ProjectA/feature-1`
 4. Automatically moves to the new worktree after creation
 
