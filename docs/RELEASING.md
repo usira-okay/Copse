@@ -36,21 +36,25 @@
 
 1. 確認 `main` 分支已經包含這次要發布的所有變更
 2. 修改 `Cargo.toml` 的 `version` 欄位（例如從 `0.1.4` 改成 `0.1.5`）
-3. Commit 並 push 到 `main`：
+3. 更新 `Cargo.lock`（**不可省略**：`Cargo.lock` 內也記錄了本套件自己的版本號，若沒有同步更新，`verify` job 裡所有帶 `--locked` 的指令都會直接失敗）：
    ```bash
-   git add Cargo.toml
+   cargo check
+   ```
+4. Commit 並 push 到 `main`：
+   ```bash
+   git add Cargo.toml Cargo.lock
    git commit -m "chore: bump version to 0.1.5"
    git push origin main
    ```
-4. 建立並推送對應的 tag（**tag 版本必須與 Cargo.toml 完全一致**，否則 workflow 會直接失敗）：
+5. 建立並推送對應的 tag（**tag 版本必須與 Cargo.toml 完全一致**，否則 workflow 會直接失敗）：
    ```bash
    git tag v0.1.5
    git push origin v0.1.5
    ```
-5. 到 GitHub repo 的 **Actions** 分頁，確認 `Publish to crates.io` workflow 已被觸發，並等待 `verify` job 執行完成（會跑版本檢查、`cargo test`、`cargo build --release`、`cargo publish --dry-run`）
-6. `verify` 通過後，`publish` job 會顯示為等待核准。到該 job 頁面點選 **Review deployments**，勾選 `crates-io` 後按下 **Approve and deploy**
-   - ⚠️ 注意：`cargo publish --dry-run`（第 5 步）**無法偵測「這個版本號已經發布過」**這種情況，它只會印出警告但仍以成功結束。也就是說，就算 `verify` 完全通過，`publish` job 仍有可能在核准後才真正失敗（crates.io 拒絕重複版本號）。核准前建議先手動到 crates.io 頁面確認這個版本號還沒發布過
-7. 等待 `publish` job 執行完成，到 <https://crates.io/crates/git_worktree_copse> 確認新版本已經上架
+6. 到 GitHub repo 的 **Actions** 分頁，確認 `Publish to crates.io` workflow 已被觸發，並等待 `verify` job 執行完成（會跑版本檢查、`cargo test`、`cargo build --release`、`cargo publish --dry-run`）
+7. `verify` 通過後，`publish` job 會顯示為等待核准。到該 job 頁面點選 **Review deployments**，勾選 `crates-io` 後按下 **Approve and deploy**
+   - ⚠️ 注意：`cargo publish --dry-run`（第 6 步）**不會因為「這個版本號已經發布過」而失敗**——它會在執行紀錄裡印出 `already exists on crates.io index` 警告，但仍以成功（exit code 0）結束。也就是說，就算 `verify` 完全通過，`publish` job 仍有可能在核准後才真正失敗（crates.io 拒絕重複版本號）。核准前建議先手動到 crates.io 頁面確認這個版本號還沒發布過，也可以到 `verify` job 的 dry-run 步驟日誌搜尋 `already exists on crates.io index` 字樣作為額外訊號
+8. 等待 `publish` job 執行完成，到 <https://crates.io/crates/git_worktree_copse> 確認新版本已經上架
 
 ## 三、疑難排解
 
@@ -71,7 +75,7 @@ git tag -d v0.1.5
 git push origin --delete v0.1.5
 ```
 
-修正 `Cargo.toml` 或重新確認版本號後，重新執行「二、每次發布步驟」中的第 4 步。
+修正 `Cargo.toml` 或重新確認版本號後，重新執行「二、每次發布步驟」中的第 5 步。
 
 ### crates.io 回傳 401 / 403（token 過期或權限不足）
 
@@ -85,7 +89,7 @@ git push origin --delete v0.1.5
 
 crates.io 不允許覆蓋已經發布過的版本號（即使該版本已經被 yank）。這是 crates.io 的原生限制，workflow 不會、也無法繞過。
 
-**注意**：`verify` job 的 `cargo publish --dry-run` **不會**攔到這種情況——重複版本號只會讓 dry-run 印出警告，但仍視為成功。真正的拒絕只會發生在 `publish` job（也就是核准之後）。如果核准後才發現失敗，屬於預期行為，不是 workflow 壞了。處理方式：將 `Cargo.toml` 改成下一個尚未使用過的版本號，重新走一次「二、每次發布步驟」。
+**注意**：`verify` job 的 `cargo publish --dry-run` **不會因此失敗**——重複版本號只會讓 dry-run 在執行紀錄印出 `already exists on crates.io index` 警告，但仍以成功（exit code 0）結束。真正的拒絕只會發生在 `publish` job（也就是核准之後）。如果核准後才發現失敗，屬於預期行為，不是 workflow 壞了。處理方式：將 `Cargo.toml` 改成下一個尚未使用過的版本號，重新走一次「二、每次發布步驟」。
 
 ### 需要撤下已發布的錯誤版本
 
