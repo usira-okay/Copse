@@ -136,6 +136,10 @@ Set-Alias -Name cps -Value Invoke-Copse
 - Git ≥ 2.15 (for `git worktree` support)
 - Rust ≥ 1.85 (edition 2024)
 
+## Releasing
+
+Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) for the crates.io release process (one-time setup plus the steps for every release).
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
