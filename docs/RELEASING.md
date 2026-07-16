@@ -34,7 +34,7 @@
 
 ## 二、每次發布步驟
 
-1. 確認 `main` 分支已經包含這次要發布的所有變更
+1. 確認 `main` 分支已經包含這次要發布的所有變更（若在其他 worktree 或分支工作，記得先 `git checkout main && git pull`，確保本地 `main` 是最新的）
 2. 修改 `Cargo.toml` 的 `version` 欄位（例如從 `0.1.4` 改成 `0.1.5`）
 3. 更新 `Cargo.lock`（**不可省略**：`Cargo.lock` 內也記錄了本套件自己的版本號，若沒有同步更新，`verify` job 裡所有帶 `--locked` 的指令都會直接失敗）：
    ```bash
