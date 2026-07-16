@@ -68,8 +68,9 @@ git_worktree_copse -a
 2. 選擇建立方式：
    - 🌿 從選取的 ref 建立新分支，再建立 worktree（預設）
    - 📂 直接從選取的 ref 建立 worktree
-3. Worktree 建立於 `../worktree/<repoName>/<branch_name>`
-   - 範例：儲存庫位於 `~/ProjectA`，分支 `feature-1` → `~/worktree/ProjectA/feature-1`
+3. Worktree 建立於 `../worktree/<repoName>/<branch_name>`，且一律以**主 worktree**（原始 clone）為基準，
+   不論你目前在哪個 worktree 底下執行 `create` 都一樣
+   - 範例：主 worktree 位於 `~/ProjectA`，分支 `feature-1` → `~/worktree/ProjectA/feature-1`
 4. 建立後自動切換到新的 worktree
 
 #### delete
