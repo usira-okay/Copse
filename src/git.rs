@@ -181,6 +181,53 @@ pub fn get_all_refs(verbose: bool) -> Result<Vec<GitRef>> {
     Ok(refs)
 }
 
+pub fn local_branch_name_for_ref(ref_name: &str, ref_type: GitRefType) -> Option<String> {
+    match ref_type {
+        GitRefType::RemoteBranch => {
+            let name = ref_name.trim();
+            if name.is_empty() || name == "HEAD" {
+                return None;
+            }
+
+            let local_name: String = name
+                .split('/')
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("/");
+
+            if local_name.is_empty() || local_name == name {
+                None
+            } else {
+                Some(local_name)
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn create_worktree_from_ref(
+    path: &Path,
+    ref_name: &str,
+    ref_type: GitRefType,
+    verbose: bool,
+) -> Result<()> {
+    if let Some(branch_name) = local_branch_name_for_ref(ref_name, ref_type) {
+        let branch_exists = Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch_name}")])
+            .status()
+            .context("Failed to check whether the local branch exists")?
+            .success();
+
+        if branch_exists {
+            return create_worktree(path, &branch_name, verbose);
+        }
+
+        return create_worktree_new_branch(path, &branch_name, ref_name, verbose);
+    }
+
+    create_worktree(path, ref_name, verbose)
+}
+
 /// Represents a worktree entry.
 #[derive(Debug, Clone)]
 pub struct Worktree {
@@ -673,5 +720,126 @@ mod tests {
         ];
 
         assert!(find_main_worktree(&worktrees).is_none());
+    }
+
+    #[test]
+    fn strips_remote_prefix_when_resolving_remote_branch_name() {
+        let branch = super::local_branch_name_for_ref("origin/feature/mask-code", super::GitRefType::RemoteBranch);
+
+        assert_eq!(branch, Some("feature/mask-code".to_string()));
+    }
+
+    #[test]
+    fn create_worktree_from_remote_branch_checks_out_named_branch() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("copse-remote-branch-{unique}"));
+        let remote = base.join("remote.git");
+        let repo = base.join("repo");
+        let worktree_path = base.join("feature-worktree");
+
+        std::fs::create_dir_all(&base).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+
+        let status = std::process::Command::new("git")
+            .args(["init", "--bare", remote.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "init.defaultBranch=master",
+                "clone",
+                remote.to_str().unwrap(),
+                repo.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["config", "user.name", "Copse Test"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["config", "user.email", "copse@example.com"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+
+        let status = std::process::Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["checkout", "-b", "feature/mask-code"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["push", "-u", "origin", "feature/mask-code"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["checkout", "master"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = std::process::Command::new("git")
+            .args(["branch", "-D", "feature/mask-code"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        std::env::set_current_dir(&repo).unwrap();
+
+        super::create_worktree_from_ref(
+            &worktree_path,
+            "origin/feature/mask-code",
+            super::GitRefType::RemoteBranch,
+            false,
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("git")
+            .args(["-C", worktree_path.to_str().unwrap(), "branch", "--show-current"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "feature/mask-code");
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

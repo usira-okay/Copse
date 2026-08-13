@@ -117,7 +117,12 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
             .green()
         );
     } else {
-        git::create_worktree(&worktree_path, &selected_ref.name, verbose)?;
+        git::create_worktree_from_ref(
+            &worktree_path,
+            &selected_ref.name,
+            selected_ref.ref_type.clone(),
+            verbose,
+        )?;
         println!(
             "{}",
             style(format!("Created worktree for '{}'", selected_ref.name)).green()
