@@ -1,6 +1,6 @@
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect};
 
 use crate::git;
 
@@ -30,7 +30,8 @@ pub fn run(verbose: bool) -> Result<()> {
 
     let display_refs: Vec<&str> = display_items.iter().map(|s| s.as_str()).collect();
 
-    let selection = Select::new()
+    let theme = ColorfulTheme::default();
+    let selection = FuzzySelect::with_theme(&theme)
         .with_prompt("Select a worktree to copy changes from")
         .items(&display_refs)
         .default(0)

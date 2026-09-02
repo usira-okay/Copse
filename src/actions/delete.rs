@@ -1,18 +1,20 @@
 use anyhow::{Context, Result};
 use console::style;
-use dialoguer::{Confirm, MultiSelect, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, MultiSelect};
 
 use crate::git;
 
 pub fn run(verbose: bool) -> Result<()> {
     // Capture the original working directory before switching to main worktree
-    let original_dir = std::env::current_dir()
-        .context("Failed to get current directory")?;
+    let original_dir = std::env::current_dir().context("Failed to get current directory")?;
     let original_dir = match std::fs::canonicalize(&original_dir) {
         Ok(p) => p,
         Err(e) => {
             if verbose {
-                eprintln!("[DEBUG] Could not canonicalize original dir {:?}: {}", original_dir, e);
+                eprintln!(
+                    "[DEBUG] Could not canonicalize original dir {:?}: {}",
+                    original_dir, e
+                );
             }
             original_dir
         }
@@ -20,7 +22,10 @@ pub fn run(verbose: bool) -> Result<()> {
     let original_dir = git::strip_unc_prefix_path(original_dir);
 
     if verbose {
-        eprintln!("[DEBUG] Original working directory: {}", original_dir.display());
+        eprintln!(
+            "[DEBUG] Original working directory: {}",
+            original_dir.display()
+        );
     }
 
     let worktrees = git::list_worktrees(verbose)?;
@@ -118,7 +123,8 @@ pub fn run(verbose: bool) -> Result<()> {
         "⚡🌿 Force delete worktree(s) and delete branch(es)",
     ];
 
-    let delete_choice = Select::new()
+    let theme = ColorfulTheme::default();
+    let delete_choice = FuzzySelect::with_theme(&theme)
         .with_prompt("\nHow would you like to delete?")
         .items(&delete_options)
         .default(0)

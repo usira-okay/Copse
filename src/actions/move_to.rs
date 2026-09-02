@@ -1,6 +1,6 @@
 use anyhow::Result;
 use console::style;
-use dialoguer::Select;
+use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 
 use crate::git;
 
@@ -27,7 +27,8 @@ pub fn run(verbose: bool) -> Result<()> {
 
     let display_refs: Vec<&str> = display_items.iter().map(|s| s.as_str()).collect();
 
-    let selection = Select::new()
+    let theme = ColorfulTheme::default();
+    let selection = FuzzySelect::with_theme(&theme)
         .with_prompt("Select a worktree to move to")
         .items(&display_refs)
         .default(0)
@@ -52,7 +53,11 @@ pub fn run(verbose: bool) -> Result<()> {
 
     println!(
         "{}",
-        style(format!("To move to the worktree, run:\n  cd {}", target_str)).cyan()
+        style(format!(
+            "To move to the worktree, run:\n  cd {}",
+            target_str
+        ))
+        .cyan()
     );
     // Print the path so shell wrapper scripts can use it
     println!("COPSE_CD:{}", target_str);
