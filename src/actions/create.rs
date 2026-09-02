@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use console::style;
-use dialoguer::{FuzzySelect, Input, Select};
+use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
 use std::path::{Path, PathBuf};
 
 use crate::git;
@@ -16,7 +16,8 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
     // Build display items for selection
     let display_items: Vec<&str> = refs.iter().map(|r| r.display.as_str()).collect();
 
-    let selection = FuzzySelect::new()
+    let theme = ColorfulTheme::default();
+    let selection = FuzzySelect::with_theme(&theme)
         .with_prompt("Select a branch or tag to create a worktree from")
         .items(&display_items)
         .default(0)
@@ -39,7 +40,7 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         "📂  Create worktree directly from the selected ref",
     ];
 
-    let create_choice = Select::new()
+    let create_choice = FuzzySelect::with_theme(&theme)
         .with_prompt("How would you like to create the worktree?")
         .items(&create_options)
         .default(0)
@@ -242,7 +243,10 @@ mod tests {
 
         assert_eq!(
             path,
-            temp_root.join("worktree").join("ProjectA").join("feature-1")
+            temp_root
+                .join("worktree")
+                .join("ProjectA")
+                .join("feature-1")
         );
 
         std::fs::remove_dir_all(temp_root).unwrap();
@@ -268,7 +272,10 @@ mod tests {
     #[test]
     fn computes_relative_path_for_nested_worktree_directory() {
         let (temp_root, repo_root) = make_temp_repo_root("ProjectA");
-        let worktree_path = temp_root.join("worktree").join("ProjectA").join("feature-1");
+        let worktree_path = temp_root
+            .join("worktree")
+            .join("ProjectA")
+            .join("feature-1");
 
         let relative = pathdiff_relative(&repo_root, &worktree_path);
 

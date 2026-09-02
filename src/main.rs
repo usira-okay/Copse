@@ -5,7 +5,7 @@ mod git;
 use anyhow::Result;
 use clap::Parser;
 use console::style;
-use dialoguer::Select;
+use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 
 use cli::Cli;
 
@@ -38,11 +38,12 @@ fn main() -> Result<()> {
     // Select action
     let action_labels = vec![
         "📂  create",
-        "🗑️  delete",
+        "[x]  delete",
         "📍  move-to",
         "📋  copy-changes",
     ];
-    let selection = Select::new()
+    let theme = ColorfulTheme::default();
+    let selection = FuzzySelect::with_theme(&theme)
         .with_prompt("Select an action")
         .items(&action_labels)
         .default(0)

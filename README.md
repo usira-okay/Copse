@@ -42,7 +42,7 @@ You will be presented with an interactive menu to select an action:
 ```
 Select an action:
 > 📂  create
-  🗑️  delete
+  [x]  delete
   📍  move-to
   📋  copy-changes
 ```
@@ -78,9 +78,9 @@ git_worktree_copse -a
 1. Multi-select worktrees to delete (Space to toggle, Enter to confirm)
    - The main worktree and your current working directory worktree are excluded from the list
 2. Choose a deletion mode:
-   - 🗑️ Delete worktree(s) but keep branch(es)
+   - [x] Delete worktree(s) but keep branch(es)
    - ⚡ Force delete worktree(s) but keep branch(es)
-   - 🗑️🌿 Delete worktree(s) and delete branch(es)
+   - [x]🌿 Delete worktree(s) and delete branch(es)
    - ⚡🌿 Force delete worktree(s) and delete branch(es)
 3. Warnings are shown for worktrees with uncommitted changes
 4. Confirmation prompt displays the selected worktrees/branches and the chosen deletion method
