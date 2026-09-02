@@ -86,9 +86,10 @@ pub fn run(verbose: bool) -> Result<()> {
         .collect();
 
     let display_refs: Vec<&str> = display_items.iter().map(|s| s.as_str()).collect();
+    let theme = ColorfulTheme::default();
 
     // Allow multi-select
-    let selections = MultiSelect::new()
+    let selections = MultiSelect::with_theme(&theme)
         .with_prompt("Select worktrees to delete (use Space to select, Enter to confirm)")
         .items(&display_refs)
         .interact_opt()?;
@@ -123,7 +124,6 @@ pub fn run(verbose: bool) -> Result<()> {
         "⚡🌿 Force delete worktree(s) and delete branch(es)",
     ];
 
-    let theme = ColorfulTheme::default();
     let delete_choice = FuzzySelect::with_theme(&theme)
         .with_prompt("\nHow would you like to delete?")
         .items(&delete_options)
