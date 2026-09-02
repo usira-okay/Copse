@@ -42,7 +42,7 @@ git_worktree_copse
 ```
 Select an action:
 > 📂  create
-  🗑️  delete
+  [x]  delete
   📍  move-to
   📋  copy-changes
 ```
@@ -78,9 +78,9 @@ git_worktree_copse -a
 1. 多選要刪除的 worktree（空白鍵切換選取，Enter 確認）
    - 主 worktree 和目前工作目錄所在的 worktree 會自動排除
 2. 選擇刪除模式：
-   - 🗑️ 刪除 worktree，保留分支
+   - [x] 刪除 worktree，保留分支
    - ⚡ 強制刪除 worktree，保留分支
-   - 🗑️🌿 刪除 worktree 並刪除分支
+   - [x]🌿 刪除 worktree 並刪除分支
    - ⚡🌿 強制刪除 worktree 並刪除分支
 3. 若 worktree 有未提交的變更會顯示警告
 4. 確認提示會列出選取的 worktree/分支以及刪除方式

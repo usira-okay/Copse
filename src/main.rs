@@ -38,7 +38,7 @@ fn main() -> Result<()> {
     // Select action
     let action_labels = vec![
         "📂  create",
-        "🗑️  delete",
+        "[x]  delete",
         "📍  move-to",
         "📋  copy-changes",
     ];
