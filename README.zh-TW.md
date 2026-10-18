@@ -46,7 +46,7 @@ Select an action:
   ❌  delete
   📍  move-to
   📋  copy-changes
-  🗑  batch-delete（跨 repo 批次刪除）
+  ❌  batch-delete
 ```
 
 ### 選項

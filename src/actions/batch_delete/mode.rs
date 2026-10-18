@@ -27,8 +27,8 @@ pub const MODES: [DeleteMode; 4] = [
 
 /// 顯示整批刪除策略及強制清理未合併分支的影響。
 pub const MODE_LABELS: [&str; 4] = [
-    "刪除 worktree，保留本地分支",
-    "強制刪除 worktree，保留本地分支",
-    "刪除 worktree 與本地分支",
-    "強制刪除 worktree 與本地分支（包含未合併分支）",
+    "❌  刪除 worktree，保留本地分支",
+    "⚡  強制刪除 worktree，保留本地分支",
+    "❌🌿 刪除 worktree 與本地分支",
+    "⚡🌿 強制刪除 worktree 與本地分支（包含未合併分支）",
 ];

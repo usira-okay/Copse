@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         "❌  delete",
         "📍  move-to",
         "📋  copy-changes",
-        "🗑  batch-delete（跨 repo 批次刪除）",
+        "❌  batch-delete",
     ];
     let theme = ColorfulTheme::default();
     let selection = FuzzySelect::with_theme(&theme)
