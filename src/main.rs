@@ -1,6 +1,10 @@
 mod actions;
 mod cli;
 mod git;
+mod repository;
+
+#[cfg(test)]
+mod test_support;
 
 use anyhow::Result;
 use clap::Parser;
@@ -41,6 +45,7 @@ fn main() -> Result<()> {
         "❌  delete",
         "📍  move-to",
         "📋  copy-changes",
+        "🗑  batch-delete（跨 repo 批次刪除）",
     ];
     let theme = ColorfulTheme::default();
     let selection = FuzzySelect::with_theme(&theme)
@@ -62,6 +67,7 @@ fn main() -> Result<()> {
         1 => actions::delete::run(cli.verbose)?,
         2 => actions::move_to::run(cli.verbose)?,
         3 => actions::copy_changes::run(cli.verbose)?,
+        4 => actions::batch_delete::run(cli.verbose)?,
         _ => unreachable!(),
     }
 
