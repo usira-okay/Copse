@@ -9,6 +9,7 @@
 - **互動式選擇** — 使用方向鍵導覽、模糊搜尋分支/標籤、多選 worktree
 - **create** — 從任意本地/遠端分支或標籤建立新的 worktree
 - **delete** — 移除一個或多個 worktree（可選擇同時刪除分支）
+- **batch-delete** — 從指定目錄探索跨 repo 的 worktree，合併多選並批次刪除
 - **move-to** — 切換到另一個 worktree
 - **copy-changes** — 在 worktree 之間複製未提交的變更
 
@@ -45,6 +46,7 @@ Select an action:
   ❌  delete
   📍  move-to
   📋  copy-changes
+  ❌  batch-delete
 ```
 
 ### 選項
@@ -84,6 +86,25 @@ git_worktree_copse -a
    - ⚡🌿 強制刪除 worktree 並刪除分支
 3. 若 worktree 有未提交的變更會顯示警告
 4. 確認提示會列出選取的 worktree/分支以及刪除方式
+
+#### batch-delete
+
+此功能需要 **Git ≥2.36**，仍須在任一 Git repo 內啟動；既有操作的 Git 版本要求不變。
+
+1. 在主選單選擇 `batch-delete`。
+2. 確認或修改搜尋根目錄，預填主 worktree 父目錄下的 `worktree`，例如 `~/worktree`。相對路徑以啟動目錄為準；可清空輸入後按 Enter 取消。
+3. 工具遞迴探索，但不跟隨目錄符號連結，遇到 repo／worktree 根目錄便停止往內；只納入實際位於搜尋根目錄內的項目。同一 repo 的多個入口會去重，清單列出 repo、分支與完整路徑。
+   - 主 worktree、目前終端所在的 worktree（包含其子目錄）、locked 及失效登錄會排除並顯示原因。
+   - 若部分目錄或 repo 無法讀取，會先顯示問題，仍可處理其他成功探索的項目。
+4. 使用空白鍵多選、Enter 確認，並選擇整批共用的四種刪除模式，與 `delete` 相同。
+   - 預設一般刪除並保留分支；一般模式跳過已暫存、未暫存或未追蹤的變更。
+   - 強制模式會列明將丟棄的變更；若同時清理分支，也會強制刪除未合併的**本地**分支，不刪除遠端分支。
+5. 檢視預設為否的最終確認。工具在刪除前重新檢查；無法可靠確認路徑、歸屬或狀態便不刪。若確認時乾淨的 worktree 隨後出現未提交變更，也會保留，需重新操作確認。
+6. 逐項刪除，失敗後繼續；最後彙整完成、跳過、worktree 刪除失敗與分支清理失敗。分支只在對應 worktree 成功移除後清理，同 repo 同分支只清理一次。
+
+取消或正常沒有候選時退出碼為 `0`；確認執行後，只要探索不完整或有任何選取項目未完成（包括跳過及 worktree 已刪但分支清理失敗），退出碼為 `1`。根目錄無效或無法讀取也會失敗。已完成的刪除不會回復。
+
+第一版不自動解鎖、prune、登錄 repo，亦不提供非互動旗標。路徑與 Git 清單必須能可靠解碼為 UTF-8，否則會回報問題並保留項目。
 
 #### move-to
 
@@ -135,6 +156,7 @@ Set-Alias -Name cps -Value Invoke-Copse
 ## 需求
 
 - Git ≥ 2.15（需支援 `git worktree`）
+- `batch-delete` 額外要求 Git ≥ 2.36
 - Rust ≥ 1.85（edition 2024）
 
 ## 發布
