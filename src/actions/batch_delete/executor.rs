@@ -15,10 +15,11 @@ use super::{
 };
 
 const INCOMPLETE: &str = "批次刪除未全部完成，請查看結果摘要";
+const PREFLIGHT_FAILED: &str = "刪除前檢查失敗，未移除任何 worktree";
 const REPOSITORY_CHANGED: &str = "儲存庫歸屬或主 worktree 路徑已變更";
 const TARGET_CHANGED: &str = "worktree 已不存在或不再屬於原儲存庫";
 const BRANCH_CHANGED: &str = "worktree 分支已變更，請重新選取";
-const PROTECTED: &str = "worktree 為主工作樹、啟動目錄、鎖定或失效項目，不能刪除";
+const PROTECTED: &str = "worktree 為主工作樹、啟動或有效工作目錄、bare、鎖定或失效項目，不能刪除";
 const PATH_CHANGED: &str = "worktree 實際路徑已變更，請重新選取";
 const DIRTY: &str = "一般模式保留有未提交變更的 worktree";
 const NEW_CHANGES: &str = "最終確認後出現新的未提交變更，請重新確認再刪除";
@@ -36,7 +37,12 @@ fn verify_repository(repository: &Repository, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-fn inspect(target: &DeleteTarget, root: &Path, original_dir: &Path, verbose: bool) -> Result<bool> {
+fn inspect(
+    target: &DeleteTarget,
+    root: Option<&Path>,
+    protected_dirs: &[PathBuf],
+    verbose: bool,
+) -> Result<bool> {
     verify_repository(&target.repository, verbose)?;
     let entries = git::list_worktrees_at(&target.repository.root, verbose)?;
     let main = entries.first().context(REPOSITORY_CHANGED)?;
@@ -53,9 +59,17 @@ fn inspect(target: &DeleteTarget, root: &Path, original_dir: &Path, verbose: boo
         PROTECTED
     );
     ensure!(entry.branch == target.worktree.branch, BRANCH_CHANGED);
-    let actual = ensure_within_root(Path::new(&entry.path), root)?;
+    let actual = match root {
+        Some(root) => ensure_within_root(Path::new(&entry.path), root)?,
+        None => canonical_path(Path::new(&entry.path))?,
+    };
     ensure!(actual == target.path, PATH_CHANGED);
-    ensure!(!original_dir.starts_with(&actual), PROTECTED);
+    ensure!(
+        !protected_dirs
+            .iter()
+            .any(|directory| directory.starts_with(&actual)),
+        PROTECTED
+    );
     ensure!(
         git::get_repo_common_dir_at(&actual, verbose)? == target.repository.common_dir,
         REPOSITORY_CHANGED
@@ -66,25 +80,50 @@ fn inspect(target: &DeleteTarget, root: &Path, original_dir: &Path, verbose: boo
 /// 讀取最終確認所需的狀態，尚不執行任何寫入。
 pub fn prepare(
     targets: &[DeleteTarget],
-    root: &Path,
-    original_dir: &Path,
+    root: Option<&Path>,
+    protected_dirs: &[PathBuf],
     verbose: bool,
 ) -> Vec<PreparedTarget> {
     targets
         .iter()
         .cloned()
         .map(|target| PreparedTarget {
-            status: inspect(&target, root, original_dir, verbose)
+            status: inspect(&target, root, protected_dirs, verbose)
                 .map_err(|error| format!("{error:#}")),
             target,
         })
         .collect()
 }
 
+/// 全部目標與探索都通過預檢後才允許開始刪除。
+pub fn ensure_prepared(
+    prepared: &[PreparedTarget],
+    mode: DeleteMode,
+    discovery_errors: &[String],
+) -> Result<()> {
+    let mut errors = discovery_errors.to_vec();
+    for item in prepared {
+        let reason = match &item.status {
+            Ok(true) if !mode.force => Some(DIRTY),
+            Err(reason) => Some(reason.as_str()),
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            errors.push(format!("{:?}：{reason}", item.target.path));
+        }
+    }
+    ensure!(
+        errors.is_empty(),
+        "{PREFLIGHT_FAILED}\n{}",
+        errors.join("\n")
+    );
+    Ok(())
+}
+
 fn execute_one(
     prepared: &PreparedTarget,
-    root: &Path,
-    original_dir: &Path,
+    root: Option<&Path>,
+    protected_dirs: &[PathBuf],
     mode: DeleteMode,
     verbose: bool,
 ) -> Outcome {
@@ -96,7 +135,7 @@ fn execute_one(
         return Outcome::Skipped(DIRTY.to_string());
     }
     // 已確認會跳過的項目不升級為刪除；其餘項目在寫入前重新檢查。
-    let dirty = match inspect(&prepared.target, root, original_dir, verbose) {
+    let dirty = match inspect(&prepared.target, root, protected_dirs, verbose) {
         Ok(dirty) => dirty,
         Err(error) => return Outcome::RemoveFailed(format!("{error:#}")),
     };
@@ -120,8 +159,8 @@ fn execute_one(
 /// 重新驗證已確認的目標，逐項移除並彙整分支清理結果。
 pub fn execute(
     prepared: &[PreparedTarget],
-    root: &Path,
-    original_dir: &Path,
+    root: Option<&Path>,
+    protected_dirs: &[PathBuf],
     mode: DeleteMode,
     verbose: bool,
 ) -> Vec<ItemResult> {
@@ -129,7 +168,7 @@ pub fn execute(
         .iter()
         .map(|item| ItemResult {
             target: item.target.clone(),
-            outcome: execute_one(item, root, original_dir, mode, verbose),
+            outcome: execute_one(item, root, protected_dirs, mode, verbose),
         })
         .collect();
 
@@ -229,9 +268,15 @@ mod tests {
             target(&repo_a, &first, "shared"),
             target(&repo_b, &second, "shared"),
         ];
-        let prepared = prepare(&targets, &root, &repo_a, false);
+        let prepared = prepare(&targets, Some(&root), std::slice::from_ref(&repo_a), false);
 
-        let results = execute(&prepared, &root, &repo_a, MODES[0], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo_a),
+            MODES[0],
+            false,
+        );
 
         assert!(
             results
@@ -252,9 +297,20 @@ mod tests {
         sandbox.git(&repo, &["config", "status.showUntrackedFiles", "no"]);
         std::fs::write(path.join("untracked.txt"), "keep").unwrap();
         let root = sandbox.root.join("batch");
-        let prepared = prepare(&[target(&repo, &path, "dirty")], &root, &repo, false);
+        let prepared = prepare(
+            &[target(&repo, &path, "dirty")],
+            Some(&root),
+            std::slice::from_ref(&repo),
+            false,
+        );
 
-        let results = execute(&prepared, &root, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(matches!(results[0].outcome, Outcome::Skipped(_)));
         assert!(path.join("untracked.txt").exists());
@@ -270,10 +326,21 @@ mod tests {
         sandbox.git(&path, &["commit", "--allow-empty", "-m", "unmerged"]);
         std::fs::write(path.join("untracked.txt"), "discard").unwrap();
         let root = sandbox.root.join("batch");
-        let prepared = prepare(&[target(&repo, &path, "dirty")], &root, &repo, false);
+        let prepared = prepare(
+            &[target(&repo, &path, "dirty")],
+            Some(&root),
+            std::slice::from_ref(&repo),
+            false,
+        );
         assert!(matches!(prepared[0].status, Ok(true)));
 
-        let results = execute(&prepared, &root, &repo, MODES[3], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[3],
+            false,
+        );
 
         assert!(matches!(results[0].outcome, Outcome::Removed));
         assert!(!path.exists());
@@ -287,9 +354,20 @@ mod tests {
         let path = sandbox.worktree(&repo, "batch/feature", "feature");
         sandbox.git(&path, &["commit", "--allow-empty", "-m", "unmerged"]);
         let root = sandbox.root.join("batch");
-        let prepared = prepare(&[target(&repo, &path, "feature")], &root, &repo, false);
+        let prepared = prepare(
+            &[target(&repo, &path, "feature")],
+            Some(&root),
+            std::slice::from_ref(&repo),
+            false,
+        );
 
-        let results = execute(&prepared, &root, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(matches!(results[0].outcome, Outcome::BranchFailed(_)));
         assert!(!path.exists());
@@ -309,13 +387,19 @@ mod tests {
                 target(&repo, &first, "first"),
                 target(&repo, &second, "second"),
             ],
-            &root,
-            &repo,
+            Some(&root),
+            std::slice::from_ref(&repo),
             false,
         );
         sandbox.git(&repo, &["worktree", "remove", first.to_str().unwrap()]);
 
-        let results = execute(&prepared, &root, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(matches!(results[0].outcome, Outcome::RemoveFailed(_)));
         assert!(matches!(results[1].outcome, Outcome::Removed));
@@ -331,11 +415,22 @@ mod tests {
             let repo = sandbox.repo("repo");
             let path = sandbox.worktree(&repo, "batch/feature", "feature");
             let root = sandbox.root.join("batch");
-            let prepared = prepare(&[target(&repo, &path, "feature")], &root, &repo, false);
+            let prepared = prepare(
+                &[target(&repo, &path, "feature")],
+                Some(&root),
+                std::slice::from_ref(&repo),
+                false,
+            );
             assert!(matches!(prepared[0].status, Ok(false)));
             std::fs::write(path.join("new.txt"), "keep").unwrap();
 
-            let results = execute(&prepared, &root, &repo, mode, false);
+            let results = execute(
+                &prepared,
+                Some(&root),
+                std::slice::from_ref(&repo),
+                mode,
+                false,
+            );
 
             assert!(matches!(results[0].outcome, Outcome::Skipped(_)));
             assert!(path.join("new.txt").exists());
@@ -354,14 +449,20 @@ mod tests {
                 target(&repo, &first, "first"),
                 target(&repo, &second, "second"),
             ],
-            &root,
-            &repo,
+            Some(&root),
+            std::slice::from_ref(&repo),
             false,
         );
         sandbox.git(&first, &["switch", "-c", "replacement"]);
         sandbox.git(&repo, &["worktree", "lock", second.to_str().unwrap()]);
 
-        let results = execute(&prepared, &root, &repo, MODES[3], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[3],
+            false,
+        );
 
         assert!(
             results
@@ -394,12 +495,18 @@ mod tests {
                 target(&repo, &first, "shared"),
                 target(&repo, &second, "shared"),
             ],
-            &root,
-            &repo,
+            Some(&root),
+            std::slice::from_ref(&repo),
             false,
         );
 
-        let results = execute(&prepared, &root, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(
             results
@@ -424,12 +531,18 @@ mod tests {
                 target(&repo, &current, "current"),
                 target(&repo, &outside, "outside"),
             ],
-            &root,
-            &current.join("subdir"),
+            Some(&root),
+            &[current.join("subdir")],
             false,
         );
 
-        let results = execute(&prepared, &root, &current.join("subdir"), MODES[3], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            &[current.join("subdir")],
+            MODES[3],
+            false,
+        );
 
         assert!(
             results
@@ -473,10 +586,21 @@ mod tests {
         .unwrap();
         let root = sandbox.root.join("batch");
 
-        let prepared = prepare(&[selected], &root, &second_repo, false);
+        let prepared = prepare(
+            &[selected],
+            Some(&root),
+            std::slice::from_ref(&second_repo),
+            false,
+        );
 
         assert!(prepared[0].status.is_err());
-        let results = execute(&prepared, &root, &second_repo, MODES[3], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&second_repo),
+            MODES[3],
+            false,
+        );
         assert!(matches!(results[0].outcome, Outcome::RemoveFailed(_)));
         assert!(path.exists() && first_repo.exists() && second_repo.exists());
         assert!(branch_exists(&second_repo, "feature"));
@@ -487,9 +611,20 @@ mod tests {
         let sandbox = TestSandbox::new();
         let repo = sandbox.repo("repo");
         let path = sandbox.worktree(&repo, "exact root", "feature");
-        let prepared = prepare(&[target(&repo, &path, "feature")], &path, &repo, false);
+        let prepared = prepare(
+            &[target(&repo, &path, "feature")],
+            Some(&path),
+            std::slice::from_ref(&repo),
+            false,
+        );
 
-        let results = execute(&prepared, &path, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&path),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(matches!(results[0].outcome, Outcome::Removed));
         assert!(!path.exists() && repo.exists());
@@ -503,9 +638,20 @@ mod tests {
         let repo = sandbox.repo("repo trailing \n");
         let path = sandbox.worktree(&repo, "batch/space \ttab\ntrailing \n", "feature");
         let root = sandbox.root.join("batch");
-        let prepared = prepare(&[target(&repo, &path, "feature")], &root, &repo, false);
+        let prepared = prepare(
+            &[target(&repo, &path, "feature")],
+            Some(&root),
+            std::slice::from_ref(&repo),
+            false,
+        );
 
-        let results = execute(&prepared, &root, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(
             matches!(results[0].outcome, Outcome::Removed),
@@ -529,9 +675,20 @@ mod tests {
                 sandbox.git(&path, &["add", "tracked.txt"]);
             }
             let root = sandbox.root.join("batch");
-            let prepared = prepare(&[target(&repo, &path, "feature")], &root, &repo, false);
+            let prepared = prepare(
+                &[target(&repo, &path, "feature")],
+                Some(&root),
+                std::slice::from_ref(&repo),
+                false,
+            );
 
-            let results = execute(&prepared, &root, &repo, MODES[0], false);
+            let results = execute(
+                &prepared,
+                Some(&root),
+                std::slice::from_ref(&repo),
+                MODES[0],
+                false,
+            );
 
             assert!(matches!(results[0].outcome, Outcome::Skipped(_)));
             assert_eq!(
@@ -548,9 +705,20 @@ mod tests {
         let path = sandbox.worktree(&repo, "batch/detached", "feature");
         sandbox.git(&path, &["switch", "--detach"]);
         let root = sandbox.root.join("batch");
-        let prepared = prepare(&[target(&repo, &path, "")], &root, &repo, false);
+        let prepared = prepare(
+            &[target(&repo, &path, "")],
+            Some(&root),
+            std::slice::from_ref(&repo),
+            false,
+        );
 
-        let results = execute(&prepared, &root, &repo, MODES[2], false);
+        let results = execute(
+            &prepared,
+            Some(&root),
+            std::slice::from_ref(&repo),
+            MODES[2],
+            false,
+        );
 
         assert!(matches!(results[0].outcome, Outcome::Removed));
         assert!(!path.exists());

@@ -22,6 +22,7 @@ pub fn resolve<'a>(
     branch: Option<&str>,
 ) -> Result<&'a Worktree> {
     ensure!(path.is_some() != branch.is_some(), INVALID_SELECTOR);
+    ensure!(branch.is_none_or(|name| !name.is_empty()), INVALID_SELECTOR);
     let path = path
         .map(|path| canonical_path(&directory.join(path)))
         .transpose()?;

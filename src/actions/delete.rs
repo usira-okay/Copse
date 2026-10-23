@@ -1,265 +1,85 @@
-use anyhow::{Context, Result};
-use console::style;
-use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, MultiSelect};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-use crate::git;
+use anyhow::{Context, Result, ensure};
 
-pub fn run(verbose: bool) -> Result<()> {
-    // Capture the original working directory before switching to main worktree
-    let original_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let original_dir = match std::fs::canonicalize(&original_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            if verbose {
-                eprintln!(
-                    "[DEBUG] Could not canonicalize original dir {:?}: {}",
-                    original_dir, e
-                );
-            }
-            original_dir
-        }
-    };
-    let original_dir = git::strip_unc_prefix_path(original_dir);
+use super::batch_delete::{self, DeleteMode, executor, target::DeleteTarget};
+use crate::{git, repository::Repository, worktree_selection};
 
-    if verbose {
-        eprintln!(
-            "[DEBUG] Original working directory: {}",
-            original_dir.display()
-        );
-    }
+const CURRENT_DIRECTORY_FAILED: &str = "無法取得有效工作目錄";
+const MAIN_MISSING: &str = "無法確認受保護的主 worktree";
+const INVALID_SELECTION: &str = "必須擇一指定一組 worktree 路徑或本地分支";
 
-    let worktrees = git::list_worktrees(verbose)?;
-
-    // Filter out the main worktree and the worktree matching the original
-    // working directory — neither should be deletable.
-    let removable: Vec<_> = worktrees
+fn repository(directory: &Path, entries: &[git::Worktree], verbose: bool) -> Result<Repository> {
+    let main = entries
         .iter()
-        .filter(|wt| {
-            if wt.is_main {
-                return false;
-            }
-            // Check if this worktree matches the original working directory
-            let wt_path = match std::fs::canonicalize(&wt.path) {
-                Ok(p) => p,
-                Err(e) => {
-                    if verbose {
-                        eprintln!(
-                            "[DEBUG] Could not canonicalize worktree path {}: {}",
-                            wt.path, e
-                        );
-                    }
-                    std::path::PathBuf::from(&wt.path)
-                }
-            };
-            let wt_path = git::strip_unc_prefix_path(wt_path);
-            if wt_path == original_dir || original_dir.starts_with(&wt_path) {
-                if verbose {
-                    eprintln!(
-                        "[DEBUG] Skipping current worktree from deletion list: {}",
-                        wt.path
-                    );
-                }
-                return false;
-            }
-            true
-        })
-        .collect();
+        .find(|entry| entry.is_main)
+        .context(MAIN_MISSING)?;
+    Ok(Repository {
+        root: worktree_selection::canonical_path(Path::new(&main.path))?,
+        common_dir: git::get_repo_common_dir_at(directory, verbose)?,
+    })
+}
 
-    if removable.is_empty() {
-        println!(
-            "{}",
-            style("No additional worktrees found to delete.").yellow()
-        );
-        return Ok(());
-    }
+fn target(repository: &Repository, worktree: &git::Worktree) -> Result<DeleteTarget> {
+    Ok(DeleteTarget {
+        repository: repository.clone(),
+        path: worktree_selection::canonical_path(Path::new(&worktree.path))?,
+        worktree: worktree.clone(),
+    })
+}
 
-    // Build display items
-    let display_items: Vec<String> = removable
+/// 先解析及預檢全部目標，再使用與批次操作相同的刪除與分支清理規則。
+pub fn execute(
+    repo_dir: &Path,
+    protected_dirs: &[PathBuf],
+    paths: &[PathBuf],
+    branches: &[String],
+    mode: DeleteMode,
+    verbose: bool,
+) -> Result<()> {
+    ensure!(paths.is_empty() != branches.is_empty(), INVALID_SELECTION);
+    let entries = git::list_worktrees_at(repo_dir, verbose)?;
+    let repository = repository(repo_dir, &entries, verbose)?;
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+    for (path, branch) in paths
         .iter()
-        .map(|wt| {
-            if wt.branch.is_empty() {
-                format!("{} (detached HEAD)", wt.path)
-            } else {
-                format!("{} [{}]", wt.path, wt.branch)
-            }
-        })
-        .collect();
-
-    let display_refs: Vec<&str> = display_items.iter().map(|s| s.as_str()).collect();
-    let theme = ColorfulTheme::default();
-
-    // Allow multi-select
-    let selections = MultiSelect::with_theme(&theme)
-        .with_prompt("Select worktrees to delete (use Space to select, Enter to confirm)")
-        .items(&display_refs)
-        .interact_opt()?;
-
-    let selections = match selections {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            println!(
-                "{}",
-                style("No worktrees selected. Operation cancelled.").yellow()
-            );
-            return Ok(());
-        }
-    };
-
-    let selected_worktrees: Vec<_> = selections.iter().map(|&i| removable[i].clone()).collect();
-
-    println!("\n{}", style("Selected worktrees:").bold());
-    for wt in &selected_worktrees {
-        println!(
-            "  {} [{}]",
-            style(&wt.path).cyan(),
-            style(&wt.branch).green()
-        );
-    }
-
-    // Choose delete option
-    let delete_options = vec![
-        "❌  Delete worktree(s) but keep branch(es)",
-        "⚡  Force delete worktree(s) but keep branch(es)",
-        "❌🌿 Delete worktree(s) and delete branch(es)",
-        "⚡🌿 Force delete worktree(s) and delete branch(es)",
-    ];
-
-    let delete_choice = FuzzySelect::with_theme(&theme)
-        .with_prompt("\nHow would you like to delete?")
-        .items(&delete_options)
-        .default(0)
-        .interact_opt()?;
-
-    let delete_choice = match delete_choice {
-        Some(c) => c,
-        None => {
-            println!("{}", style("Operation cancelled.").yellow());
-            return Ok(());
-        }
-    };
-
-    let force = delete_choice == 1 || delete_choice == 3;
-    let delete_branch = delete_choice == 2 || delete_choice == 3;
-
-    // Show appropriate warning and get confirmation
-    if force {
-        println!(
-            "\n{}",
-            style("⚠ Force delete will remove worktree(s) even if they have uncommitted changes!")
-                .red()
-                .bold()
-        );
-    } else {
-        // Check for uncommitted changes in selected worktrees
-        let mut has_changes = false;
-        for wt in &selected_worktrees {
-            match git::worktree_has_changes(&wt.path, verbose) {
-                Ok(true) => {
-                    println!(
-                        "\n{}",
-                        style(format!("⚠ Worktree '{}' has uncommitted changes!", wt.path))
-                            .red()
-                            .bold()
-                    );
-                    has_changes = true;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    if verbose {
-                        eprintln!("[DEBUG] Could not check changes for {}: {}", wt.path, e);
-                    }
-                }
-            }
-        }
-
-        if has_changes {
-            let discard = Confirm::new()
-                .with_prompt("Some worktrees have uncommitted changes. Discard these changes?")
-                .default(false)
-                .interact()?;
-
-            if !discard {
-                println!("{}", style("Operation cancelled.").yellow());
-                return Ok(());
-            }
+        .map(|path| (Some(path.as_path()), None))
+        .chain(branches.iter().map(|branch| (None, Some(branch.as_str()))))
+    {
+        let selected = worktree_selection::resolve(&entries, repo_dir, path, branch)?;
+        let target = target(&repository, selected)?;
+        if seen.insert(target.path.clone()) {
+            targets.push(target);
         }
     }
+    let prepared = executor::prepare(&targets, None, protected_dirs, verbose);
+    executor::ensure_prepared(&prepared, mode, &[])?;
+    let results = executor::execute(&prepared, None, protected_dirs, mode, verbose);
+    batch_delete::print_results(&results, &[], mode.delete_branch);
+    executor::ensure_complete(&results, &[])
+}
 
-    if delete_branch {
-        println!(
-            "\n{}",
-            style("This will also delete the associated branch(es).").yellow()
-        );
-    }
-
-    // Build a detailed confirmation prompt
-    let branch_list: Vec<String> = selected_worktrees
-        .iter()
-        .map(|wt| {
-            if wt.branch.is_empty() {
-                format!("  {} (detached HEAD)", wt.path)
-            } else {
-                format!("  {} [{}]", wt.path, wt.branch)
-            }
-        })
-        .collect();
-    let method_desc = &delete_options[delete_choice];
-    println!(
-        "\n{}\n{}\n{} {}",
-        style("Worktrees to delete:").bold(),
-        branch_list.join("\n"),
-        style("Method:").bold(),
-        method_desc,
-    );
-
-    let confirmed = Confirm::new()
-        .with_prompt("Are you sure you want to proceed?")
-        .default(false)
-        .interact()?;
-
-    if !confirmed {
-        println!("{}", style("Operation cancelled.").yellow());
-        return Ok(());
-    }
-
-    // Perform deletion
-    for wt in &selected_worktrees {
-        // Remove worktree
-        match git::remove_worktree(&wt.path, force, verbose) {
-            Ok(()) => {
-                println!(
-                    "{}",
-                    style(format!("✓ Removed worktree: {}", wt.path)).green()
-                );
-            }
-            Err(e) => {
-                println!(
-                    "{}",
-                    style(format!("✗ Failed to remove worktree '{}': {}", wt.path, e)).red()
-                );
-                continue;
-            }
-        }
-
-        // Delete branch if requested
-        if delete_branch && !wt.branch.is_empty() {
-            match git::delete_branch(&wt.branch, force, verbose) {
-                Ok(()) => {
-                    println!(
-                        "{}",
-                        style(format!("✓ Deleted branch: {}", wt.branch)).green()
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "{}",
-                        style(format!("✗ Failed to delete branch '{}': {}", wt.branch, e)).red()
-                    );
-                }
-            }
+/// 互動選取同一儲存庫的可刪除 worktree，再進入共用預檢與確認流程。
+pub fn run(verbose: bool, protected_dirs: &[PathBuf]) -> Result<()> {
+    let directory = std::env::current_dir().context(CURRENT_DIRECTORY_FAILED)?;
+    let entries = git::list_worktrees_at(&directory, verbose)?;
+    let repository = repository(&directory, &entries, verbose)?;
+    let mut targets = Vec::new();
+    for worktree in entries.iter().filter(|worktree| {
+        !worktree.is_main
+            && !worktree.is_bare
+            && worktree.locked.is_none()
+            && worktree.prunable.is_none()
+    }) {
+        let target = target(&repository, worktree)?;
+        if !protected_dirs
+            .iter()
+            .any(|directory| directory.starts_with(&target.path))
+        {
+            targets.push(target);
         }
     }
-
-    println!("\n{}", style("Done!").green().bold());
-    Ok(())
+    batch_delete::select_and_execute(&targets, None, protected_dirs, verbose)
 }

@@ -1,11 +1,12 @@
-mod discovery;
-mod executor;
-mod item_result;
+pub(super) mod discovery;
+pub(super) mod executor;
+pub(super) mod item_result;
 mod mode;
 mod outcome;
-mod prepared_target;
-mod target;
+pub(super) mod prepared_target;
+pub(super) mod target;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -15,8 +16,10 @@ use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect, theme::ColorfulTheme};
 use crate::git;
 use discovery::canonical_path;
 use item_result::ItemResult;
+pub use mode::DeleteMode;
 use mode::{MODE_LABELS, MODES};
 use outcome::Outcome;
+use prepared_target::PreparedTarget;
 use target::DeleteTarget;
 
 const CURRENT_DIRECTORY_FAILED: &str = "無法取得啟動目錄";
@@ -29,19 +32,20 @@ const ROOT_CONTROL_PROMPT: &str = "搜尋根目錄（留空使用下列預設路
 const CANCELLED: &str = "已取消操作。";
 const SEARCHING: &str = "正在探索 worktree…";
 const EXCLUDED: &str = "已排除的項目";
-const DISCOVERY_ERRORS: &str = "探索未完整完成；下列問題不會被忽略，繼續執行後將以狀態碼 1 結束";
-const SELECT_PROMPT: &str = "選取跨 repo 的 worktree（空白鍵勾選，Enter 確認，Esc 取消）";
+const UNKNOWN_TARGET: &str = "指定路徑不是搜尋範圍內可刪除的 worktree";
+const SELECT_PROMPT: &str = "選取 worktree（空白鍵勾選，Enter 確認，Esc 取消）";
 const MODE_PROMPT: &str = "整批使用哪種刪除方式？";
 const NO_TARGETS: &str = "沒有可刪除的 worktree。";
 const CONFIRMATION: &str = "即將處理的 worktree";
-const CONFIRM_PROMPT: &str = "確定執行上述批次刪除？";
+const CONFIRM_PROMPT: &str = "確定執行上述刪除？";
 const FORCE_WARNING: &str = "強制刪除會永久丟棄所列項目的未提交變更。";
 const FORCE_BRANCH_WARNING: &str = "此次也會強制清理本地分支，包含未合併的分支。";
+const BRANCH_WARNING: &str = "此次也會清理已合併的本地分支。";
 const METHOD: &str = "刪除方式";
 const WILL_REMOVE: &str = "將刪除";
 const WILL_DISCARD: &str = "將刪除並丟棄未提交變更";
-const WILL_SKIP_DIRTY: &str = "將跳過：一般模式保留未提交變更";
-const WILL_SKIP_ERROR: &str = "無法確認狀態，將不刪除";
+const WILL_SKIP_DIRTY: &str = "整批停止：一般模式保留未提交變更";
+const WILL_SKIP_ERROR: &str = "無法確認狀態，整批停止";
 const REMOVED: &str = "已移除 worktree";
 const REMOVED_WITH_BRANCH: &str = "已移除 worktree 與本地分支";
 const SKIPPED: &str = "已跳過";
@@ -82,7 +86,12 @@ fn print_messages(title: &str, messages: &[String]) {
     }
 }
 
-fn print_results(results: &[ItemResult], discovery_errors: &[String], delete_branch: bool) {
+/// 將完成結果及摘要寫入標準輸出，失敗診斷則寫入標準錯誤。
+pub(super) fn print_results(
+    results: &[ItemResult],
+    discovery_errors: &[String],
+    delete_branch: bool,
+) {
     let (mut removed, mut skipped, mut failed, mut branch_failed) = (0, 0, 0, 0);
     for result in results {
         let target = label(&result.target);
@@ -98,14 +107,14 @@ fn print_results(results: &[ItemResult], discovery_errors: &[String], delete_bra
             }
             Outcome::Skipped(reason) => {
                 skipped += 1;
-                println!(
+                eprintln!(
                     "{}",
                     style(format!("{SKIPPED}: {target}: {}", reason.escape_debug())).yellow()
                 );
             }
             Outcome::RemoveFailed(reason) => {
                 failed += 1;
-                println!(
+                eprintln!(
                     "{}",
                     style(format!(
                         "{REMOVE_FAILED}: {target}: {}",
@@ -116,7 +125,7 @@ fn print_results(results: &[ItemResult], discovery_errors: &[String], delete_bra
             }
             Outcome::BranchFailed(reason) => {
                 branch_failed += 1;
-                println!(
+                eprintln!(
                     "{}",
                     style(format!(
                         "{BRANCH_FAILED}: {target}: {}",
@@ -137,11 +146,140 @@ fn print_results(results: &[ItemResult], discovery_errors: &[String], delete_bra
     );
 }
 
-/// 互動式跨儲存庫批次刪除 worktree。
-pub fn run(verbose: bool) -> Result<()> {
-    git::require_batch_delete_git(verbose)?;
-    let original_dir = canonical_path(&std::env::current_dir().context(CURRENT_DIRECTORY_FAILED)?)?;
-    let entries = git::list_worktrees_at(&original_dir, verbose)?;
+fn print_prepared(prepared: &[PreparedTarget], mode: DeleteMode) {
+    println!("\n{}", style(CONFIRMATION).bold());
+    for item in prepared {
+        let state = match &item.status {
+            Ok(true) if mode.force => WILL_DISCARD.to_string(),
+            Ok(true) => WILL_SKIP_DIRTY.to_string(),
+            Ok(false) => WILL_REMOVE.to_string(),
+            Err(reason) => format!("{WILL_SKIP_ERROR}: {}", reason.escape_debug()),
+        };
+        println!("  {} — {state}", label(&item.target));
+    }
+    if mode.force {
+        println!("{}", style(FORCE_WARNING).red().bold());
+    }
+    if mode.delete_branch {
+        println!(
+            "{}",
+            if mode.force {
+                FORCE_BRANCH_WARNING
+            } else {
+                BRANCH_WARNING
+            }
+        );
+    }
+}
+
+/// 單一儲存庫與跨儲存庫共用選取、最終確認及整批預檢。
+pub(super) fn select_and_execute(
+    targets: &[DeleteTarget],
+    root: Option<&Path>,
+    protected_dirs: &[PathBuf],
+    verbose: bool,
+) -> Result<()> {
+    if targets.is_empty() {
+        println!("{NO_TARGETS}");
+        return Ok(());
+    }
+    let theme = ColorfulTheme::default();
+    let labels: Vec<_> = targets.iter().map(label).collect();
+    let selections = MultiSelect::with_theme(&theme)
+        .with_prompt(SELECT_PROMPT)
+        .items(&labels)
+        .interact_opt()?;
+    let selections = match selections {
+        Some(selected) if !selected.is_empty() => selected,
+        _ => return cancelled(),
+    };
+    let choice = FuzzySelect::with_theme(&theme)
+        .with_prompt(MODE_PROMPT)
+        .items(&MODE_LABELS)
+        .default(0)
+        .interact_opt()?;
+    let Some(choice) = choice else {
+        return cancelled();
+    };
+    let mode = MODES[choice];
+    let selected: Vec<_> = selections
+        .into_iter()
+        .map(|index| targets[index].clone())
+        .collect();
+    let prepared = executor::prepare(&selected, root, protected_dirs, verbose);
+    print_prepared(&prepared, mode);
+    println!("{METHOD}: {}", MODE_LABELS[choice]);
+    executor::ensure_prepared(&prepared, mode, &[])?;
+    if Confirm::with_theme(&theme)
+        .with_prompt(CONFIRM_PROMPT)
+        .default(false)
+        .interact_opt()?
+        != Some(true)
+    {
+        return cancelled();
+    }
+    let results = executor::execute(&prepared, root, protected_dirs, mode, verbose);
+    print_results(&results, &[], mode.delete_branch);
+    executor::ensure_complete(&results, &[])
+}
+
+/// 依有效工作目錄解析搜尋範圍與目標；空路徑清單表示明確選擇全部候選。
+pub fn execute(
+    effective_dir: &Path,
+    protected_dirs: &[PathBuf],
+    root: &Path,
+    paths: &[PathBuf],
+    mode: DeleteMode,
+    dry_run: bool,
+    verbose: bool,
+) -> Result<()> {
+    let requested_root = effective_dir.join(root);
+    let discovery = discovery::discover(&requested_root, protected_dirs, verbose)?;
+    print_messages(EXCLUDED, &discovery.excluded);
+    // 搜尋不完整時不能以找到的子集合開始刪除，即使使用者指定單一路徑。
+    executor::ensure_prepared(&[], mode, &discovery.errors)?;
+    let targets = if paths.is_empty() {
+        discovery.targets
+    } else {
+        let mut seen = HashSet::new();
+        let mut selected = Vec::new();
+        for path in paths {
+            let actual = discovery::ensure_within_root(&effective_dir.join(path), &requested_root)?;
+            let target = discovery
+                .targets
+                .iter()
+                .find(|target| target.path == actual)
+                .with_context(|| format!("{UNKNOWN_TARGET}：{path:?}"))?;
+            if seen.insert(actual) {
+                selected.push(target.clone());
+            }
+        }
+        selected
+    };
+    let prepared = executor::prepare(&targets, Some(&discovery.root), protected_dirs, verbose);
+    if dry_run {
+        print_prepared(&prepared, mode);
+    }
+    executor::ensure_prepared(&prepared, mode, &[])?;
+    if dry_run {
+        return Ok(());
+    }
+    let results = executor::execute(
+        &prepared,
+        Some(&discovery.root),
+        protected_dirs,
+        mode,
+        verbose,
+    );
+    print_results(&results, &[], mode.delete_branch);
+    executor::ensure_complete(&results, &[])
+}
+
+/// 互動式跨儲存庫批次刪除 worktree，保護啟動與有效工作目錄。
+pub fn run(verbose: bool, protected_dirs: &[PathBuf]) -> Result<()> {
+    let effective_dir =
+        canonical_path(&std::env::current_dir().context(CURRENT_DIRECTORY_FAILED)?)?;
+    let entries = git::list_worktrees_at(&effective_dir, verbose)?;
     let main = entries
         .iter()
         .find(|entry| entry.is_main)
@@ -174,75 +312,17 @@ pub fn run(verbose: bool) -> Result<()> {
             return cancelled();
         }
     } else {
-        let path = PathBuf::from(input);
-        if path.is_absolute() {
-            path
-        } else {
-            original_dir.join(path)
-        }
+        effective_dir.join(input)
     };
 
     println!("{SEARCHING}");
-    let discovery = discovery::discover(&root, &original_dir, verbose)?;
+    let discovery = discovery::discover(&root, protected_dirs, verbose)?;
     print_messages(EXCLUDED, &discovery.excluded);
-    print_messages(DISCOVERY_ERRORS, &discovery.errors);
-    if discovery.targets.is_empty() {
-        println!("{NO_TARGETS}");
-        print_results(&[], &discovery.errors, false);
-        return executor::ensure_complete(&[], &discovery.errors);
-    }
-    let labels: Vec<_> = discovery.targets.iter().map(label).collect();
-    let selections = MultiSelect::with_theme(&theme)
-        .with_prompt(SELECT_PROMPT)
-        .items(&labels)
-        .interact_opt()?;
-    let selections = match selections {
-        Some(selected) if !selected.is_empty() => selected,
-        _ => return cancelled(),
-    };
-    let choice = FuzzySelect::with_theme(&theme)
-        .with_prompt(MODE_PROMPT)
-        .items(&MODE_LABELS)
-        .default(0)
-        .interact_opt()?;
-    let Some(choice) = choice else {
-        return cancelled();
-    };
-    let mode = MODES[choice];
-    let selected: Vec<_> = selections
-        .into_iter()
-        .map(|index| discovery.targets[index].clone())
-        .collect();
-    let prepared = executor::prepare(&selected, &discovery.root, &original_dir, verbose);
-
-    println!("\n{}", style(CONFIRMATION).bold());
-    for item in &prepared {
-        let state = match &item.status {
-            Ok(true) if mode.force => WILL_DISCARD.to_string(),
-            Ok(true) => WILL_SKIP_DIRTY.to_string(),
-            Ok(false) => WILL_REMOVE.to_string(),
-            Err(reason) => format!("{WILL_SKIP_ERROR}: {}", reason.escape_debug()),
-        };
-        println!("  {} — {state}", label(&item.target));
-    }
-    println!("{METHOD}: {}", MODE_LABELS[choice]);
-    print_messages(DISCOVERY_ERRORS, &discovery.errors);
-    if mode.force {
-        println!("{}", style(FORCE_WARNING).red().bold());
-        if mode.delete_branch {
-            println!("{}", style(FORCE_BRANCH_WARNING).red().bold());
-        }
-    }
-    if Confirm::with_theme(&theme)
-        .with_prompt(CONFIRM_PROMPT)
-        .default(false)
-        .interact_opt()?
-        != Some(true)
-    {
-        return cancelled();
-    }
-
-    let results = executor::execute(&prepared, &discovery.root, &original_dir, mode, verbose);
-    print_results(&results, &discovery.errors, mode.delete_branch);
-    executor::ensure_complete(&results, &discovery.errors)
+    executor::ensure_prepared(&[], MODES[0], &discovery.errors)?;
+    select_and_execute(
+        &discovery.targets,
+        Some(&discovery.root),
+        protected_dirs,
+        verbose,
+    )
 }

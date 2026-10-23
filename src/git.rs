@@ -756,54 +756,6 @@ fn decode_git_path(output: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Remove a worktree.
-pub fn remove_worktree(path: &str, force: bool, verbose: bool) -> Result<()> {
-    if verbose {
-        eprintln!("[DEBUG] Removing worktree at {} (force: {})", path, force);
-    }
-
-    let mut args = vec!["worktree", "remove", path];
-    if force {
-        args.push("--force");
-    }
-
-    let output = command_at(Path::new("."))
-        .args(&args)
-        .output()
-        .context("Failed to remove worktree")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to remove worktree: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    Ok(())
-}
-
-/// Delete a branch.
-pub fn delete_branch(branch: &str, force: bool, verbose: bool) -> Result<()> {
-    if verbose {
-        eprintln!("[DEBUG] Deleting branch {} (force: {})", branch, force);
-    }
-
-    let flag = if force { "-D" } else { "-d" };
-    let output = command_at(Path::new("."))
-        .args(["branch", flag, branch])
-        .output()
-        .context("Failed to delete branch")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to delete branch: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    Ok(())
-}
-
 /// 檢查 worktree 的變更，讀取狀態時不刷新 Git index。
 pub fn worktree_has_changes(path: &str, verbose: bool) -> Result<bool> {
     worktree_has_changes_at(Path::new(path), verbose)

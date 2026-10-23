@@ -12,8 +12,9 @@ pub fn run(cli: Cli) -> Result<()> {
     )?;
     let directory = match cli.directory {
         Some(path) => worktree_selection::canonical_path(&original_dir.join(path))?,
-        None => original_dir,
+        None => original_dir.clone(),
     };
+    let protected_dirs = [original_dir, directory.clone()];
     match cli.command {
         Some(CliCommand::Create {
             reference,
@@ -26,6 +27,42 @@ pub fn run(cli: Cli) -> Result<()> {
             cli.absolute_path,
         ),
         Some(CliCommand::List { json }) => actions::list::run(&directory, json, cli.verbose),
+        Some(CliCommand::Delete {
+            paths,
+            branches,
+            force,
+            delete_branch,
+            ..
+        }) => actions::delete::execute(
+            &directory,
+            &protected_dirs,
+            &paths,
+            &branches,
+            actions::batch_delete::DeleteMode {
+                force,
+                delete_branch,
+            },
+            cli.verbose,
+        ),
+        Some(CliCommand::BatchDelete {
+            root,
+            paths,
+            dry_run,
+            force,
+            delete_branch,
+            ..
+        }) => actions::batch_delete::execute(
+            &directory,
+            &protected_dirs,
+            &root,
+            &paths,
+            actions::batch_delete::DeleteMode {
+                force,
+                delete_branch,
+            },
+            dry_run,
+            cli.verbose,
+        ),
         Some(CliCommand::MoveTo { path, branch }) => {
             let entries = git::list_worktrees_at(&directory, cli.verbose)?;
             let selected = worktree_selection::resolve(
@@ -38,7 +75,7 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         None => {
             std::env::set_current_dir(&directory).context(CHANGE_DIRECTORY_FAILED)?;
-            interactive::run(cli.verbose, cli.absolute_path)
+            interactive::run(cli.verbose, cli.absolute_path, &protected_dirs)
         }
     }
 }
