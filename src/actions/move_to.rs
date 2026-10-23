@@ -1,66 +1,48 @@
-use anyhow::Result;
-use console::style;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use crate::{git, worktree_selection};
+use anyhow::{Result, ensure};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
+use std::path::Path;
 
-use crate::git;
+const SELECT_PROMPT: &str = "選擇要切換的 worktree";
+const CANCELLED: &str = "已取消操作。";
+const NO_TARGETS: &str = "沒有其他可切換的 worktree。";
+const INVALID_TARGET: &str = "無法切換到 bare 或已失效的 worktree";
+const CHANGE_HINT: &str = "切換目錄";
+const CD_MARKER: &str = "COPSE_CD:";
 
+/// 選取目標後共用與參數模式相同的路徑檢查及 shell 輸出。
 pub fn run(verbose: bool) -> Result<()> {
-    let worktrees = git::list_worktrees(verbose)?;
-
-    if worktrees.len() <= 1 {
-        println!("{}", style("No other worktrees to move to.").yellow());
+    let entries = git::list_worktrees(verbose)?;
+    if entries.len() <= 1 {
+        println!("{NO_TARGETS}");
         return Ok(());
     }
-
-    // Build display items
-    let display_items: Vec<String> = worktrees
+    let labels: Vec<_> = entries
         .iter()
-        .map(|wt| {
-            let label = if wt.is_main { "(main)" } else { "" };
-            if wt.branch.is_empty() {
-                format!("{} (detached HEAD) {}", wt.path, label)
-            } else {
-                format!("{} [{}] {}", wt.path, wt.branch, label)
-            }
-        })
+        .map(|entry| format!("{:?} [{}]", entry.path, entry.branch))
         .collect();
-
-    let display_refs: Vec<&str> = display_items.iter().map(|s| s.as_str()).collect();
-
-    let theme = ColorfulTheme::default();
-    let selection = FuzzySelect::with_theme(&theme)
-        .with_prompt("Select a worktree to move to")
-        .items(&display_refs)
+    let selected = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt(SELECT_PROMPT)
+        .items(&labels)
         .default(0)
         .interact_opt()?;
+    if let Some(index) = selected {
+        execute(&entries[index])?;
+    } else {
+        println!("{CANCELLED}");
+    }
+    Ok(())
+}
 
-    let selection = match selection {
-        Some(s) => s,
-        None => {
-            println!("{}", style("Operation cancelled.").yellow());
-            return Ok(());
-        }
-    };
-
-    let selected = &worktrees[selection];
-
-    let target = std::fs::canonicalize(&selected.path)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&selected.path));
-
-    // Strip UNC extended-length path prefix for Windows compatibility.
-    let target_str = target.display().to_string();
-    let target_str = git::strip_unc_prefix(&target_str);
-
-    println!(
-        "{}",
-        style(format!(
-            "To move to the worktree, run:\n  cd {}",
-            target_str
-        ))
-        .cyan()
+/// 驗證目標存在且可安全表示為單行，再交由 shell 包裝腳本切換。
+pub fn execute(selected: &git::Worktree) -> Result<()> {
+    ensure!(
+        !selected.is_bare && selected.prunable.is_none(),
+        INVALID_TARGET
     );
-    // Print the path so shell wrapper scripts can use it
-    println!("COPSE_CD:{}", target_str);
-
+    let target = worktree_selection::canonical_path(Path::new(&selected.path))?;
+    git::ensure_single_line_path(&target)?;
+    println!("{CHANGE_HINT}：{target:?}");
+    println!("{CD_MARKER}{}", target.display());
     Ok(())
 }

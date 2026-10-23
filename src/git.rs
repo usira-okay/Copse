@@ -1,30 +1,51 @@
 use anyhow::{Context, Result, bail, ensure};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-/// Check if the current directory is inside a git repository.
-pub fn is_git_repo() -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+mod worktree_source;
+pub use worktree_source::WorktreeSource;
+
+const REPO_ROOT_FAILED: &str = "無法取得 worktree 根目錄，請確認目前位於 Git 儲存庫內";
+const CREATE_REF_INVALID: &str = "來源必須是本地分支、遠端追蹤分支、標籤、HEAD 或唯一的 commit SHA";
+const CREATE_REF_MISSING: &str = "找不到來源 ref 或來源不是 commit";
+const CREATE_REF_AMBIGUOUS: &str =
+    "來源名稱有歧義，請指定完整 refs/heads/、refs/remotes/ 或 refs/tags/ 名稱";
+const CREATE_REF_LIST_FAILED: &str = "無法列出本地儲存庫的 refs";
+const CREATE_BRANCH_INVALID: &str = "新分支名稱無效";
+const CREATE_BRANCH_EXISTS: &str = "本地同名分支已存在，無法建立新分支";
+const CREATE_BRANCH_CHECK_FAILED: &str = "無法確認本地分支狀態";
+const CREATE_WORKTREE_FAILED: &str = "無法建立 worktree";
+const CREATE_PATH_EXISTS: &str = "建立 worktree 的目標路徑已存在";
+const CREATE_PATH_CHECK_FAILED: &str = "無法確認建立 worktree 的實體路徑";
+const SINGLE_LINE_PATH_REQUIRED: &str = "worktree 路徑必須是有效 UTF-8 且不得包含 CR 或 LF";
+const HEADS_PREFIX: &str = "refs/heads/";
+const REMOTES_PREFIX: &str = "refs/remotes/";
+const TAGS_PREFIX: &str = "refs/tags/";
+
+/// 取得目前工作目錄所屬 worktree 的根目錄。
+pub fn get_repo_root() -> Result<PathBuf> {
+    get_repo_root_at(Path::new("."), false)
 }
 
-/// Get the top-level directory of the git repository.
-pub fn get_repo_root() -> Result<PathBuf> {
-    let output = Command::new("git")
+/// 取得指定目錄所屬 worktree 的正規化根目錄。
+pub fn get_repo_root_at(repo_dir: &Path, verbose: bool) -> Result<PathBuf> {
+    let output = command_at(repo_dir)
         .args(["rev-parse", "--show-toplevel"])
         .output()
-        .context("Failed to run git rev-parse")?;
-    if !output.status.success() {
-        bail!("Not inside a git repository");
+        .context(REPO_ROOT_FAILED)?;
+    ensure!(
+        output.status.success(),
+        "{REPO_ROOT_FAILED}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let root = decode_git_path(&output.stdout)?
+        .canonicalize()
+        .context(REPO_ROOT_FAILED)?;
+    let root = strip_unc_prefix_path(root);
+    if verbose {
+        eprintln!("[DEBUG] worktree 根目錄：{root:?}");
     }
-    let path = String::from_utf8(output.stdout)
-        .context("Invalid UTF-8 in git output")?
-        .trim()
-        .to_string();
-    Ok(PathBuf::from(path))
+    Ok(root)
 }
 
 /// Represents a branch or tag reference.
@@ -63,19 +84,19 @@ impl GitRefType {
     }
 }
 
-/// Get all branches and tags sorted by: local branch > remote branch > local tag > remote tag.
+/// 依本地分支、遠端分支、本地標籤、遠端標籤排序互動清單。
 pub fn get_all_refs(verbose: bool) -> Result<Vec<GitRef>> {
     let mut refs = Vec::new();
 
     // Local branches
-    let output = Command::new("git")
-        .args(["branch", "--format=%(refname:short)"])
+    let output = command_at(Path::new("."))
+        .args(["branch", "--format=%(refname)"])
         .output()
         .context("Failed to list local branches")?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
-            let name = line.trim().to_string();
+            let name = line.strip_prefix(HEADS_PREFIX).unwrap_or(line).to_string();
             if !name.is_empty() {
                 refs.push(GitRef {
                     display: format!("[Local Branch] {}", name),
@@ -87,15 +108,20 @@ pub fn get_all_refs(verbose: bool) -> Result<Vec<GitRef>> {
     }
 
     // Remote branches
-    let output = Command::new("git")
-        .args(["branch", "-r", "--format=%(refname:short)"])
+    let output = command_at(Path::new("."))
+        .args(["branch", "-r", "--format=%(refname)%00%(symref)"])
         .output()
         .context("Failed to list remote branches")?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
-            let name = line.trim().to_string();
-            if !name.is_empty() && !name.contains("HEAD") {
+            let (reference, symbolic_target) =
+                line.split_once('\0').context(CREATE_REF_LIST_FAILED)?;
+            let name = reference
+                .strip_prefix(REMOTES_PREFIX)
+                .unwrap_or(reference)
+                .to_string();
+            if !name.is_empty() && symbolic_target.is_empty() {
                 refs.push(GitRef {
                     display: format!("[Remote Branch] {}", name),
                     name,
@@ -106,7 +132,7 @@ pub fn get_all_refs(verbose: bool) -> Result<Vec<GitRef>> {
     }
 
     // Local tags
-    let output = Command::new("git")
+    let output = command_at(Path::new("."))
         .args(["tag", "--list"])
         .output()
         .context("Failed to list tags")?;
@@ -131,7 +157,7 @@ pub fn get_all_refs(verbose: bool) -> Result<Vec<GitRef>> {
         .map(|r| r.name.clone())
         .collect();
 
-    let output = Command::new("git")
+    let output = command_at(Path::new("."))
         .args(["ls-remote", "--tags"])
         .output()
         .context("Failed to list remote tags")?;
@@ -181,6 +207,7 @@ pub fn get_all_refs(verbose: bool) -> Result<Vec<GitRef>> {
     Ok(refs)
 }
 
+/// 從遠端追蹤分支名稱移除遠端前綴，保留分支本身的子路徑。
 pub fn local_branch_name_for_ref(ref_name: &str, ref_type: GitRefType) -> Option<String> {
     match ref_type {
         GitRefType::RemoteBranch => {
@@ -189,11 +216,7 @@ pub fn local_branch_name_for_ref(ref_name: &str, ref_type: GitRefType) -> Option
                 return None;
             }
 
-            let local_name: String = name
-                .split('/')
-                .skip(1)
-                .collect::<Vec<_>>()
-                .join("/");
+            let local_name: String = name.split('/').skip(1).collect::<Vec<_>>().join("/");
 
             if local_name.is_empty() || local_name == name {
                 None
@@ -205,27 +228,223 @@ pub fn local_branch_name_for_ref(ref_name: &str, ref_type: GitRefType) -> Option
     }
 }
 
-pub fn create_worktree_from_ref(
-    path: &Path,
-    ref_name: &str,
-    ref_type: GitRefType,
-    verbose: bool,
-) -> Result<()> {
-    if let Some(branch_name) = local_branch_name_for_ref(ref_name, ref_type) {
-        let branch_exists = Command::new("git")
-            .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch_name}")])
-            .status()
-            .context("Failed to check whether the local branch exists")?
-            .success();
-
-        if branch_exists {
-            return create_worktree(path, &branch_name, verbose);
-        }
-
-        return create_worktree_new_branch(path, &branch_name, ref_name, verbose);
+/// 僅解析已存在於本地的 ref 或 commit，不接受 revision expression，也不執行 fetch。
+pub fn resolve_worktree_source_at(repo_dir: &Path, reference: &str) -> Result<WorktreeSource> {
+    ensure!(
+        !reference.is_empty()
+            && !reference.starts_with('-')
+            && !reference.contains(['\0', '\r', '\n']),
+        CREATE_REF_INVALID
+    );
+    if reference == "HEAD" {
+        return detached_source(repo_dir, reference, reference);
     }
 
-    create_worktree(path, ref_name, verbose)
+    let output = command_at(repo_dir)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            "--",
+            HEADS_PREFIX,
+            REMOTES_PREFIX,
+            TAGS_PREFIX,
+        ])
+        .output()
+        .context(CREATE_REF_LIST_FAILED)?;
+    ensure!(
+        output.status.success(),
+        "{CREATE_REF_LIST_FAILED}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let refs = std::str::from_utf8(&output.stdout).context(BATCH_GIT_UTF8_FAILED)?;
+    let matches: Vec<&str> = refs
+        .lines()
+        .filter(|name| {
+            *name == reference
+                || (!reference.starts_with("refs/")
+                    && [HEADS_PREFIX, REMOTES_PREFIX, TAGS_PREFIX]
+                        .iter()
+                        .any(|prefix| name.strip_prefix(*prefix) == Some(reference)))
+        })
+        .collect();
+    ensure!(matches.len() <= 1, "{CREATE_REF_AMBIGUOUS}：{reference:?}");
+    let Some(full_ref) = matches.first().copied() else {
+        ensure!(
+            reference.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{CREATE_REF_MISSING}：{reference:?}"
+        );
+        return detached_source(repo_dir, reference, reference);
+    };
+    let commit = resolve_commit_at(repo_dir, full_ref)?;
+    if let Some(branch) = full_ref.strip_prefix(HEADS_PREFIX) {
+        return Ok(WorktreeSource {
+            reference: full_ref.to_string(),
+            commit,
+            directory_name: branch.to_string(),
+            local_branch: Some(branch.to_string()),
+            track_remote: false,
+        });
+    }
+    if let Some(remote_branch) = full_ref.strip_prefix(REMOTES_PREFIX) {
+        let branch = local_branch_name_for_ref(remote_branch, GitRefType::RemoteBranch)
+            .context(CREATE_REF_INVALID)?;
+        validate_branch_name_at(repo_dir, &branch)?;
+        return Ok(WorktreeSource {
+            reference: full_ref.to_string(),
+            commit,
+            directory_name: branch.clone(),
+            local_branch: Some(branch),
+            track_remote: true,
+        });
+    }
+    Ok(WorktreeSource {
+        reference: full_ref.to_string(),
+        commit,
+        directory_name: full_ref
+            .strip_prefix(TAGS_PREFIX)
+            .context(CREATE_REF_INVALID)?
+            .to_string(),
+        local_branch: None,
+        track_remote: false,
+    })
+}
+
+fn detached_source(
+    repo_dir: &Path,
+    reference: &str,
+    directory_name: &str,
+) -> Result<WorktreeSource> {
+    let commit = resolve_commit_at(repo_dir, reference)?;
+    Ok(WorktreeSource {
+        reference: commit.clone(),
+        commit,
+        directory_name: directory_name.to_string(),
+        local_branch: None,
+        track_remote: false,
+    })
+}
+
+fn resolve_commit_at(repo_dir: &Path, reference: &str) -> Result<String> {
+    let output = command_at(repo_dir)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{reference}^{{commit}}"),
+        ])
+        .output()
+        .context(CREATE_REF_MISSING)?;
+    ensure!(
+        output.status.success(),
+        "{CREATE_REF_MISSING}：{reference:?}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commit = std::str::from_utf8(&output.stdout)
+        .context(BATCH_GIT_UTF8_FAILED)?
+        .trim_end_matches('\n');
+    ensure!(
+        !commit.is_empty() && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        CREATE_REF_MISSING
+    );
+    Ok(commit.to_string())
+}
+
+fn validate_branch_name_at(repo_dir: &Path, branch: &str) -> Result<()> {
+    ensure!(
+        !branch.is_empty() && !branch.starts_with('-') && !branch.contains('\0'),
+        CREATE_BRANCH_INVALID
+    );
+    let output = command_at(repo_dir)
+        .args(["check-ref-format", &format!("{HEADS_PREFIX}{branch}")])
+        .output()
+        .context(CREATE_BRANCH_INVALID)?;
+    ensure!(
+        output.status.success(),
+        "{CREATE_BRANCH_INVALID}：{branch:?}"
+    );
+    Ok(())
+}
+
+fn ensure_new_branch_at(repo_dir: &Path, branch: &str) -> Result<()> {
+    validate_branch_name_at(repo_dir, branch)?;
+    let output = command_at(repo_dir)
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "--",
+            &format!("{HEADS_PREFIX}{branch}"),
+        ])
+        .output()
+        .context(CREATE_BRANCH_CHECK_FAILED)?;
+    match output.status.code() {
+        Some(1) => Ok(()),
+        Some(0) => bail!("{CREATE_BRANCH_EXISTS}：{branch:?}"),
+        _ => bail!(
+            "{CREATE_BRANCH_CHECK_FAILED}：{branch:?}：{}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    }
+}
+
+/// 確保 shell 包裝器可將切換路徑安全表示成單行標記。
+pub fn ensure_single_line_path(path: &Path) -> Result<()> {
+    let path = path.to_str().context(SINGLE_LINE_PATH_REQUIRED)?;
+    ensure!(!path.contains(['\r', '\n']), SINGLE_LINE_PATH_REQUIRED);
+    Ok(())
+}
+
+/// 從已解析來源建立 worktree，明確控制分支附著、追蹤與 detached HEAD。
+pub fn create_worktree_at(
+    repo_dir: &Path,
+    path: &Path,
+    source: &WorktreeSource,
+    new_branch: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
+    ensure_single_line_path(path)?;
+    ensure!(
+        !path.try_exists().context(CREATE_PATH_EXISTS)? && !path.is_symlink(),
+        "{CREATE_PATH_EXISTS}：{path:?}"
+    );
+    // 既存祖先可能透過符號連結指向含換行的路徑，必須在建立分支或目錄前確認。
+    let mut ancestor = path.parent().context(CREATE_PATH_CHECK_FAILED)?;
+    while !ancestor.try_exists().context(CREATE_PATH_CHECK_FAILED)? {
+        ancestor = ancestor.parent().context(CREATE_PATH_CHECK_FAILED)?;
+    }
+    ensure_single_line_path(&ancestor.canonicalize().context(CREATE_PATH_CHECK_FAILED)?)?;
+    let mut command = command_at(repo_dir);
+    command.args(["worktree", "add"]);
+    let reference = if let Some(branch) = new_branch {
+        ensure_new_branch_at(repo_dir, branch)?;
+        command.args(["--no-track", "-b", branch]);
+        &source.commit
+    } else if source.track_remote {
+        let branch = source.local_branch.as_deref().context(CREATE_REF_INVALID)?;
+        ensure_new_branch_at(repo_dir, branch)?;
+        command.args(["--track", "-b", branch]);
+        &source.reference
+    } else if let Some(branch) = &source.local_branch {
+        branch
+    } else {
+        command.arg("--detach");
+        &source.commit
+    };
+    let output = command
+        .arg("--")
+        .arg(path)
+        .arg(reference)
+        .output()
+        .with_context(|| format!("{CREATE_WORKTREE_FAILED}：{path:?}"))?;
+    ensure!(
+        output.status.success(),
+        "{CREATE_WORKTREE_FAILED}：{path:?}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if verbose {
+        eprintln!("[DEBUG] 已建立 worktree：{path:?}，來源：{reference:?}");
+    }
+    Ok(())
 }
 
 /// Represents a worktree entry.
@@ -241,76 +460,9 @@ pub struct Worktree {
     pub prunable: Option<String>,
 }
 
-/// List all worktrees.
+/// 以 NUL 分隔格式取得目前儲存庫的完整 worktree 登錄。
 pub fn list_worktrees(verbose: bool) -> Result<Vec<Worktree>> {
-    let output = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .context("Failed to list worktrees")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to list worktrees: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut worktrees = Vec::new();
-    let mut current_path = String::new();
-    let mut current_branch = String::new();
-    let mut is_bare = false;
-
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_path = path.to_string();
-            current_branch = String::new();
-            is_bare = false;
-        } else if let Some(branch) = line.strip_prefix("branch ") {
-            current_branch = branch
-                .strip_prefix("refs/heads/")
-                .unwrap_or(branch)
-                .to_string();
-        } else if line == "bare" {
-            is_bare = true;
-        } else if line.is_empty() && !current_path.is_empty() {
-            worktrees.push(Worktree {
-                path: current_path.clone(),
-                branch: current_branch.clone(),
-                is_main: worktrees.is_empty(),
-                is_bare,
-                locked: None,
-                prunable: None,
-            });
-            current_path = String::new();
-            current_branch = String::new();
-            is_bare = false;
-        }
-    }
-
-    // Handle last entry if no trailing newline
-    if !current_path.is_empty() {
-        worktrees.push(Worktree {
-            path: current_path,
-            branch: current_branch,
-            is_main: worktrees.is_empty(),
-            is_bare,
-            locked: None,
-            prunable: None,
-        });
-    }
-
-    if verbose {
-        eprintln!("[DEBUG] Found {} worktrees:", worktrees.len());
-        for wt in &worktrees {
-            eprintln!(
-                "  {} (branch: {}, main: {}, bare: {})",
-                wt.path, wt.branch, wt.is_main, wt.is_bare
-            );
-        }
-    }
-
-    Ok(worktrees)
+    list_worktrees_at(Path::new("."), verbose)
 }
 
 const BATCH_GIT_LIST_FAILED: &str = "無法讀取 worktree 登錄";
@@ -322,8 +474,7 @@ const BATCH_GIT_COMMON_DIR_FAILED: &str = "無法取得儲存庫共用 Git 目�
 const BATCH_GIT_CANONICALIZE_FAILED: &str = "無法正規化儲存庫共用 Git 目錄";
 const BATCH_GIT_STATUS_FAILED: &str = "無法確認 worktree 的變更狀態";
 const BATCH_GIT_VERSION_FAILED: &str = "無法取得 Git 版本";
-const BATCH_GIT_VERSION_REQUIRED: &str =
-    "批次刪除需要 Git 2.36 以上版本；請升級 Git，其他操作仍可使用";
+const BATCH_GIT_VERSION_REQUIRED: &str = "所有操作需要 Git 2.36 以上版本；請升級 Git";
 const BATCH_GIT_PATH_FAILED: &str = "Git 回傳無效路徑";
 const BATCH_GIT_MIN_VERSION: (u64, u64) = (2, 36);
 const BATCH_GIT_LOCAL_ENV: &[&str] = &[
@@ -345,9 +496,14 @@ const BATCH_GIT_LOCAL_ENV: &[&str] = &[
     "GIT_NAMESPACE",
 ];
 
-fn batch_git_command(repo_dir: &Path) -> Command {
+/// 在指定儲存庫執行 Git，隔離外部儲存庫環境並關閉一般互動輸入。
+pub fn command_at(repo_dir: &Path) -> Command {
     let mut command = Command::new("git");
-    command.current_dir(repo_dir);
+    command
+        .current_dir(repo_dir)
+        .stdin(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "");
     // 呼叫端可能由 Git hook 啟動；清除儲存庫區域環境，避免跨 repo 命令誤用來源 repo。
     for name in BATCH_GIT_LOCAL_ENV {
         command.env_remove(name);
@@ -357,7 +513,7 @@ fn batch_git_command(repo_dir: &Path) -> Command {
 
 /// 從指定儲存庫讀取完整且未經路徑跳脫的 worktree 登錄。
 pub fn list_worktrees_at(repo_dir: &Path, verbose: bool) -> Result<Vec<Worktree>> {
-    let output = batch_git_command(repo_dir)
+    let output = command_at(repo_dir)
         .args(["worktree", "list", "--porcelain", "-z"])
         .output()
         .with_context(|| format!("{BATCH_GIT_LIST_FAILED}：{repo_dir:?}"))?;
@@ -455,7 +611,7 @@ pub fn remove_worktree_at(repo_dir: &Path, path: &Path, force: bool, verbose: bo
     if verbose {
         eprintln!("[DEBUG] {repo_dir:?}：git worktree remove {path:?} (force={force})");
     }
-    let mut command = batch_git_command(repo_dir);
+    let mut command = command_at(repo_dir);
     command.args(["worktree", "remove"]);
     if force {
         command.arg("--force");
@@ -480,7 +636,7 @@ pub fn delete_branch_at(repo_dir: &Path, branch: &str, force: bool, verbose: boo
     if verbose {
         eprintln!("[DEBUG] {repo_dir:?}：git branch {flag} -- {branch:?}");
     }
-    let output = batch_git_command(repo_dir)
+    let output = command_at(repo_dir)
         .args(["branch", flag, "--", branch])
         .output()
         .with_context(|| format!("{BATCH_GIT_BRANCH_FAILED}：{branch:?}"))?;
@@ -495,7 +651,7 @@ pub fn delete_branch_at(repo_dir: &Path, branch: &str, force: bool, verbose: boo
 
 /// 取得指定儲存庫正規化後的共用 Git 目錄，供跨 worktree 識別儲存庫。
 pub fn get_repo_common_dir_at(repo_dir: &Path, verbose: bool) -> Result<PathBuf> {
-    let output = batch_git_command(repo_dir)
+    let output = command_at(repo_dir)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .output()
         .with_context(|| format!("{BATCH_GIT_COMMON_DIR_FAILED}：{repo_dir:?}"))?;
@@ -520,8 +676,9 @@ pub fn get_repo_common_dir_at(repo_dir: &Path, verbose: bool) -> Result<PathBuf>
 
 /// 檢查指定 worktree 的變更，包含使用者設定隱藏的未追蹤檔案與子模組變更。
 pub fn worktree_has_changes_at(path: &Path, verbose: bool) -> Result<bool> {
-    let output = batch_git_command(path)
+    let output = command_at(path)
         .args([
+            "--no-optional-locks",
             "status",
             "--porcelain",
             "-z",
@@ -543,9 +700,9 @@ pub fn worktree_has_changes_at(path: &Path, verbose: bool) -> Result<bool> {
     Ok(has_changes)
 }
 
-/// 確認 Git 支援批次刪除所需的 NUL 分隔 worktree 格式。
+/// 確認所有操作共用的 Git 版本與 NUL 分隔 worktree 格式可用。
 pub fn require_batch_delete_git(verbose: bool) -> Result<()> {
-    let output = Command::new("git")
+    let output = command_at(Path::new("."))
         .arg("--version")
         .output()
         .context(BATCH_GIT_VERSION_FAILED)?;
@@ -599,87 +756,6 @@ fn decode_git_path(output: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Find the main worktree (the original repository clone) from a list of
-/// worktrees, regardless of its position in the list.
-fn find_main_worktree(worktrees: &[Worktree]) -> Option<&Worktree> {
-    worktrees.iter().find(|wt| wt.is_main)
-}
-
-/// Get the root directory of the main worktree (the original repository
-/// clone), regardless of which worktree the command is currently run from.
-pub fn get_main_worktree_root(verbose: bool) -> Result<PathBuf> {
-    let worktrees = list_worktrees(verbose)?;
-    let main = find_main_worktree(&worktrees).context("Could not find main worktree")?;
-    Ok(PathBuf::from(&main.path))
-}
-
-/// Create a worktree at the given path for the given branch.
-pub fn create_worktree(path: &Path, branch: &str, verbose: bool) -> Result<()> {
-    if verbose {
-        eprintln!(
-            "[DEBUG] Creating worktree at {:?} for branch {}",
-            path, branch
-        );
-    }
-
-    let output = Command::new("git")
-        .args(["worktree", "add", &path.to_string_lossy(), branch])
-        .output()
-        .context("Failed to create worktree")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to create worktree: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    if verbose {
-        eprintln!(
-            "[DEBUG] Worktree created: {}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-    }
-
-    Ok(())
-}
-
-/// Create a worktree with a new branch based on the given start point.
-pub fn create_worktree_new_branch(
-    path: &Path,
-    new_branch: &str,
-    start_point: &str,
-    verbose: bool,
-) -> Result<()> {
-    if verbose {
-        eprintln!(
-            "[DEBUG] Creating worktree at {:?} with new branch {} from {}",
-            path, new_branch, start_point
-        );
-    }
-
-    let output = Command::new("git")
-        .args([
-            "worktree",
-            "add",
-            "-b",
-            new_branch,
-            &path.to_string_lossy(),
-            start_point,
-        ])
-        .output()
-        .context("Failed to create worktree with new branch")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to create worktree: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    Ok(())
-}
-
 /// Remove a worktree.
 pub fn remove_worktree(path: &str, force: bool, verbose: bool) -> Result<()> {
     if verbose {
@@ -691,7 +767,7 @@ pub fn remove_worktree(path: &str, force: bool, verbose: bool) -> Result<()> {
         args.push("--force");
     }
 
-    let output = Command::new("git")
+    let output = command_at(Path::new("."))
         .args(&args)
         .output()
         .context("Failed to remove worktree")?;
@@ -713,7 +789,7 @@ pub fn delete_branch(branch: &str, force: bool, verbose: bool) -> Result<()> {
     }
 
     let flag = if force { "-D" } else { "-d" };
-    let output = Command::new("git")
+    let output = command_at(Path::new("."))
         .args(["branch", flag, branch])
         .output()
         .context("Failed to delete branch")?;
@@ -728,32 +804,9 @@ pub fn delete_branch(branch: &str, force: bool, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Check if a worktree has uncommitted changes.
+/// 檢查 worktree 的變更，讀取狀態時不刷新 Git index。
 pub fn worktree_has_changes(path: &str, verbose: bool) -> Result<bool> {
-    if verbose {
-        eprintln!("[DEBUG] Checking for uncommitted changes in {}", path);
-    }
-
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(path)
-        .output()
-        .context("Failed to check worktree status")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to check worktree status: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let has_changes = !String::from_utf8_lossy(&output.stdout).trim().is_empty();
-
-    if verbose {
-        eprintln!("[DEBUG] Worktree {} has changes: {}", path, has_changes);
-    }
-
-    Ok(has_changes)
+    worktree_has_changes_at(Path::new(path), verbose)
 }
 
 /// Get the diff (patch) of changes in a worktree (both staged and unstaged).
@@ -763,14 +816,14 @@ pub fn get_worktree_diff(path: &str, verbose: bool) -> Result<String> {
     }
 
     // Get unstaged changes
-    let unstaged = Command::new("git")
+    let unstaged = command_at(Path::new("."))
         .args(["diff"])
         .current_dir(path)
         .output()
         .context("Failed to get unstaged diff")?;
 
     // Get staged changes
-    let staged = Command::new("git")
+    let staged = command_at(Path::new("."))
         .args(["diff", "--cached"])
         .current_dir(path)
         .output()
@@ -791,7 +844,7 @@ pub fn get_worktree_diff(path: &str, verbose: bool) -> Result<String> {
     }
 
     // Also get untracked files
-    let untracked = Command::new("git")
+    let untracked = command_at(Path::new("."))
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(path)
         .output()
@@ -814,7 +867,7 @@ pub fn apply_diff(diff: &str, verbose: bool) -> Result<bool> {
         eprintln!("[DEBUG] Applying diff ({} bytes)", diff.len());
     }
 
-    let mut child = Command::new("git")
+    let mut child = command_at(Path::new("."))
         .args(["apply", "--check", "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -853,7 +906,7 @@ pub fn force_apply_diff(diff: &str, verbose: bool) -> Result<()> {
         eprintln!("[DEBUG] Force applying diff ({} bytes)", diff.len());
     }
 
-    let mut child = Command::new("git")
+    let mut child = command_at(Path::new("."))
         .args(["apply", "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -891,7 +944,7 @@ pub fn apply_diff_with_fallback(diff: &str, verbose: bool) -> Result<()> {
         );
     }
 
-    let mut child = Command::new("git")
+    let mut child = command_at(Path::new("."))
         .args(["apply", "--3way", "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -927,13 +980,6 @@ pub fn apply_diff_with_fallback(diff: &str, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Strip UNC extended-length path prefix (\\?\) that `std::fs::canonicalize`
-/// produces on Windows. PowerShell's Set-Location and many other tools do not
-/// support these paths.
-pub fn strip_unc_prefix(path: &str) -> &str {
-    path.strip_prefix(r"\\?\").unwrap_or(path)
-}
-
 /// Strip UNC prefix from a `PathBuf`, returning a cleaned `PathBuf`.
 pub fn strip_unc_prefix_path(path: PathBuf) -> PathBuf {
     let s = path.display().to_string();
@@ -946,7 +992,7 @@ pub fn strip_unc_prefix_path(path: PathBuf) -> PathBuf {
 
 /// Copy untracked files from source worktree to current directory.
 pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
-    let output = Command::new("git")
+    let output = command_at(Path::new("."))
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(source_path)
         .output()
@@ -981,43 +1027,6 @@ pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_main_worktree, Worktree};
-
-    fn make_worktree(path: &str, branch: &str, is_main: bool) -> Worktree {
-        Worktree {
-            path: path.to_string(),
-            branch: branch.to_string(),
-            is_main,
-            is_bare: false,
-            locked: None,
-            prunable: None,
-        }
-    }
-
-    #[test]
-    fn finds_main_worktree_when_not_first_in_list() {
-        let worktrees = vec![
-            make_worktree("/repo/worktree/feature-a", "feature-a", false),
-            make_worktree("/repo", "main", true),
-            make_worktree("/repo/worktree/feature-b", "feature-b", false),
-        ];
-
-        let main = find_main_worktree(&worktrees).expect("main worktree should be found");
-
-        assert_eq!(main.path, "/repo");
-        assert!(main.is_main);
-    }
-
-    #[test]
-    fn returns_none_when_no_main_worktree_present() {
-        let worktrees = vec![
-            make_worktree("/repo/worktree/feature-a", "feature-a", false),
-            make_worktree("/repo/worktree/feature-b", "feature-b", false),
-        ];
-
-        assert!(find_main_worktree(&worktrees).is_none());
-    }
-
     #[test]
     fn batch_parser_preserves_special_characters_and_status_reasons() {
         let output = concat!(
@@ -1370,122 +1379,43 @@ mod tests {
 
     #[test]
     fn strips_remote_prefix_when_resolving_remote_branch_name() {
-        let branch = super::local_branch_name_for_ref("origin/feature/mask-code", super::GitRefType::RemoteBranch);
+        let branch = super::local_branch_name_for_ref(
+            "origin/feature/mask-code",
+            super::GitRefType::RemoteBranch,
+        );
 
         assert_eq!(branch, Some("feature/mask-code".to_string()));
     }
 
     #[test]
     fn create_worktree_from_remote_branch_checks_out_named_branch() {
-        use std::time::{SystemTime, UNIX_EPOCH};
+        let sandbox = crate::test_support::TestSandbox::new();
+        let repo = sandbox.repo("repo");
+        let worktree_path = sandbox.root.join("feature-worktree");
+        sandbox.git(&repo, &["remote", "add", "origin", repo.to_str().unwrap()]);
+        sandbox.git(
+            &repo,
+            &[
+                "update-ref",
+                "refs/remotes/origin/feature/mask-code",
+                "HEAD",
+            ],
+        );
+        let source = super::resolve_worktree_source_at(&repo, "origin/feature/mask-code").unwrap();
+        super::create_worktree_at(&repo, &worktree_path, &source, None, false).unwrap();
 
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!("copse-remote-branch-{unique}"));
-        let remote = base.join("remote.git");
-        let repo = base.join("repo");
-        let worktree_path = base.join("feature-worktree");
-
-        std::fs::create_dir_all(&base).unwrap();
-
-        let original_dir = std::env::current_dir().unwrap();
-
-        let status = std::process::Command::new("git")
-            .args(["init", "--bare", remote.to_str().unwrap()])
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args([
-                "-c",
-                "init.defaultBranch=master",
-                "clone",
-                remote.to_str().unwrap(),
-                repo.to_str().unwrap(),
-            ])
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["config", "user.name", "Copse Test"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["config", "user.email", "copse@example.com"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        std::fs::write(repo.join("README.md"), "hello\n").unwrap();
-
-        let status = std::process::Command::new("git")
-            .args(["add", "README.md"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["checkout", "-b", "feature/mask-code"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["push", "-u", "origin", "feature/mask-code"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["checkout", "master"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let status = std::process::Command::new("git")
-            .args(["branch", "-D", "feature/mask-code"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        std::env::set_current_dir(&repo).unwrap();
-
-        super::create_worktree_from_ref(
+        let output = sandbox.git(&worktree_path, &["branch", "--show-current"]);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "feature/mask-code"
+        );
+        let upstream = sandbox.git(
             &worktree_path,
-            "origin/feature/mask-code",
-            super::GitRefType::RemoteBranch,
-            false,
-        )
-        .unwrap();
-
-        let output = std::process::Command::new("git")
-            .args(["-C", worktree_path.to_str().unwrap(), "branch", "--show-current"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "feature/mask-code");
-
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&base).unwrap();
+            &["rev-parse", "--symbolic-full-name", "@{upstream}"],
+        );
+        assert_eq!(
+            String::from_utf8(upstream.stdout).unwrap().trim(),
+            "refs/remotes/origin/feature/mask-code"
+        );
     }
 }
