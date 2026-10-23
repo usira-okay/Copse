@@ -24,6 +24,21 @@ fn help_and_version_work_outside_a_repository() {
 }
 
 #[test]
+fn interactive_menu_without_a_terminal_fails_without_changing_worktrees() {
+    let sandbox = TestSandbox::new();
+    let repo = sandbox.repo("repo");
+    let before = sandbox.git(&repo, &["worktree", "list", "--porcelain"]);
+
+    let output = copse(&repo, &[]);
+
+    assert_code(&output, 1);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("模糊選單需要互動式終端"));
+    assert!(!stdout(&output).contains("COPSE_CD:"));
+    let after = sandbox.git(&repo, &["worktree", "list", "--porcelain"]);
+    assert_eq!(before.stdout, after.stdout);
+}
+
+#[test]
 fn missing_arguments_and_conflicting_selectors_are_usage_errors() {
     let sandbox = TestSandbox::new();
     let repo = sandbox.repo("repo");

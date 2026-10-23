@@ -1,6 +1,5 @@
-use crate::{git, worktree_selection};
+use crate::{fuzzy_select::fuzzy_select, git, worktree_selection};
 use anyhow::{Result, ensure};
-use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use std::path::Path;
 
 const SELECT_PROMPT: &str = "選擇要切換的 worktree";
@@ -21,11 +20,7 @@ pub fn run(verbose: bool) -> Result<()> {
         .iter()
         .map(|entry| format!("{:?} [{}]", entry.path, entry.branch))
         .collect();
-    let selected = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt(SELECT_PROMPT)
-        .items(&labels)
-        .default(0)
-        .interact_opt()?;
+    let selected = fuzzy_select(SELECT_PROMPT, &labels)?;
     if let Some(index) = selected {
         execute(&entries[index])?;
     } else {

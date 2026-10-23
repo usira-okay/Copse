@@ -1,6 +1,6 @@
-use crate::{git, worktree_selection};
+use crate::{fuzzy_select::fuzzy_select, git, worktree_selection};
 use anyhow::{Context, Result, ensure};
-use dialoguer::{Confirm, FuzzySelect, theme::ColorfulTheme};
+use dialoguer::Confirm;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -40,12 +40,7 @@ pub fn run(verbose: bool) -> Result<()> {
         .iter()
         .map(|entry| format!("{:?} [{}]", entry.path, entry.branch))
         .collect();
-    let Some(selection) = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt(SELECT_SOURCE)
-        .items(&labels)
-        .default(0)
-        .interact_opt()?
-    else {
+    let Some(selection) = fuzzy_select(SELECT_SOURCE, &labels)? else {
         println!("{CANCELLED}");
         return Ok(());
     };
