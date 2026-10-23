@@ -2,6 +2,7 @@ mod actions;
 mod app;
 mod cli;
 mod cli_command;
+mod fuzzy_select;
 mod git;
 mod interactive;
 mod list_entry;

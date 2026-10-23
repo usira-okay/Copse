@@ -16,10 +16,21 @@
 
 ## 安裝
 
+### 從 crates.io 安裝
+
+```bash
+cargo install git_worktree_copse --version 0.2.0 --locked
+copse --help
+```
+
+crate 名稱維持 `git_worktree_copse`，0.2.0 起只提供 `copse` 執行檔。升級後請將既有腳本、捷徑與 shell wrapper 中的 `git_worktree_copse` 命令改為 `copse`；安裝指令仍使用原 crate 名稱。
+
+未自訂安裝根目錄時，請確認 Cargo 的執行檔目錄已加入 `PATH`：Unix 預設為 `$HOME/.cargo/bin`，Windows 預設為 `%USERPROFILE%\.cargo\bin`（PowerShell：`$env:USERPROFILE\.cargo\bin`）。若設定 `CARGO_HOME`，則使用該目錄下的 `bin`；使用 `cargo install --root <目錄>` 時，則使用 `<目錄>/bin`。
+
 ### 從原始碼安裝
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 ### 手動建置
@@ -27,16 +38,16 @@ cargo install --path .
 ```bash
 git clone https://github.com/usira-okay/Copse.git
 cd Copse
-cargo build --release
-# 執行檔位於 target/release/git_worktree_copse
+cargo build --release --locked
+# 執行檔位於 target/release/copse（Windows 為 copse.exe）
 ```
 
 ## 使用方式
 
-在任何 git 儲存庫內執行 `git_worktree_copse`：
+在任何 git 儲存庫內執行 `copse`：
 
 ```bash
-git_worktree_copse
+copse
 ```
 
 會出現互動式選單讓你選擇操作：
@@ -59,38 +70,38 @@ Select an action:
 | `-C <目錄>` | — | 指定有效工作目錄；可放在子命令前後 |
 
 ```bash
-git_worktree_copse --verbose
-git_worktree_copse -a
+copse --verbose
+copse -a
 ```
 
 ### 參數模式
 
-指定子命令後即使用非互動模式；缺少必要參數會直接回報錯誤。執行檔名稱仍為 `git_worktree_copse`，說明中的程式名稱為 `copse`。不指定子命令時保留互動選單。
+指定子命令後即使用非互動模式；缺少必要參數會直接回報錯誤。不指定子命令時保留互動選單。
 
 ```bash
 # 在指定儲存庫查詢，stdout 僅輸出 JSON
-git_worktree_copse -C ~/ProjectA list --json
+copse -C ~/ProjectA list --json
 
 # 從已有來源建立 worktree
-git_worktree_copse create feature/topic
-git_worktree_copse create HEAD --new-branch feature/new
-git_worktree_copse create refs/remotes/origin/topic
+copse create feature/topic
+copse create HEAD --new-branch feature/new
+copse create refs/remotes/origin/topic
 
 # 選取 worktree；實際切換 shell 目錄需使用下方 wrapper
-git_worktree_copse move-to --branch feature/topic
-git_worktree_copse move-to --path ../worktree/ProjectA/feature_topic
+copse move-to --branch feature/topic
+copse move-to --path ../worktree/ProjectA/feature_topic
 
 # 必須明確確認刪除；同一種 selector 可重複
-git_worktree_copse delete --branch feature/a --branch feature/b --yes
-git_worktree_copse delete --path ../worktree/ProjectA/topic --yes --force --delete-branch
+copse delete --branch feature/a --branch feature/b --yes
+copse delete --path ../worktree/ProjectA/topic --yes --force --delete-branch
 
 # 可在儲存庫外探索；預覽不需要 --yes
-git_worktree_copse batch-delete --root ~/worktree --all --dry-run
-git_worktree_copse batch-delete --root ~/worktree --path ~/worktree/ProjectA/topic --yes
+copse batch-delete --root ~/worktree --all --dry-run
+copse batch-delete --root ~/worktree --path ~/worktree/ProjectA/topic --yes
 
 # 將來源變更複製到有效工作目錄所屬 worktree 的根目錄
-git_worktree_copse copy-changes --from-branch feature/topic
-git_worktree_copse -C ~/ProjectA copy-changes --from-path ../worktree/ProjectA/topic --include-untracked --3way
+copse copy-changes --from-branch feature/topic
+copse -C ~/ProjectA copy-changes --from-path ../worktree/ProjectA/topic --include-untracked --3way
 ```
 
 | 子命令 | 參數 |
@@ -144,11 +155,13 @@ git_worktree_copse -C ~/ProjectA copy-changes --from-path ../worktree/ProjectA/t
 
 #### 腳本整合
 
-退出碼 `0` 表示成功（互動取消亦為 `0`）、`2` 表示參數語法錯誤、`1` 表示操作失敗。結果寫入 stdout，錯誤及 `-v` 診斷寫入 stderr；`list --json` 的 stdout 可直接交給 JSON parser。
+退出碼 `0` 表示成功（以 Esc 正常取消亦為 `0`）、`2` 表示參數語法錯誤、`1` 表示操作失敗。結果寫入 stdout，錯誤及 `-v` 診斷寫入 stderr；`list --json` 的 stdout 可直接交給 JSON parser。
 
 Copse 的參數模式與標準 Git 驗證不會補問互動輸入。Git hooks 仍會執行；自訂 hook 若會等待輸入，須由維護者自行調整。路徑與 Git 清單必須能可靠解碼為 UTF-8，否則回報錯誤。
 
 ### 互動操作
+
+互動操作需保留可輸入的終端，並讓 stderr 連接終端（TTY）；stdout 可由 shell wrapper 擷取，選單與 ANSI 控制碼不會混入 `COPSE_CD` 輸出。模糊搜尋支援中文與非連續字元；0.2.0 的選單外觀與搜尋結果排序可能與舊版不同。模糊搜尋選單按 Esc 可正常取消，按 Ctrl-C 則以非零退出碼中斷。
 
 #### create
 
@@ -206,14 +219,14 @@ Copse 的參數模式與標準 Git 驗證不會補問互動輸入。Git hooks �
 
 ### Shell 整合
 
-`git_worktree_copse` 無法直接變更 shell 的工作目錄。`move-to` 和 `create` 操作會輸出 `COPSE_CD:<path>` 行，供 shell 包裝腳本使用。
+`copse` 無法直接變更 shell 的工作目錄。`move-to` 和 `create` 操作會輸出 `COPSE_CD:<path>` 行，供 shell 包裝腳本使用。
 
 Bash/Zsh 包裝腳本範例：
 
 ```bash
 copse_wrapper() {
   local output copse_exit=0 line cd_path=''
-  output=$(git_worktree_copse "$@") || copse_exit=$?
+  output=$(copse "$@") || copse_exit=$?
   printf '%s\n' "$output"
   if [ "$copse_exit" -ne 0 ]; then
     return "$copse_exit"
@@ -235,7 +248,7 @@ PowerShell 包裝腳本範例：
 
 ```powershell
 function Invoke-Copse {
-  $output = & git_worktree_copse @args
+  $output = & copse @args
   $copseExitCode = $LASTEXITCODE
   $output | Write-Output
   if ($copseExitCode -ne 0) {
@@ -256,6 +269,19 @@ Set-Alias -Name cps -Value Invoke-Copse
 
 - Git ≥ 2.36（所有操作統一使用 NUL 分隔的 worktree 清單）
 - Rust ≥ 1.85（edition 2024）
+
+Git 2.36 僅為功能門檻，並非安全版本保證；例如 [Git 官方安全公告 GHSA-vwqx-4fm8-6qc9](https://github.com/git/git/security/advisories/GHSA-vwqx-4fm8-6qc9) 涵蓋多個仍符合此門檻的版本。請使用作業系統或 Git 發行商仍支援、已套用安全修補的版本；Copse 不會代為升級系統 Git。
+
+## 開發與測試
+
+先完成建置，再執行測試：
+
+```bash
+cargo build --release --locked
+cargo test --locked
+```
+
+Unix 的互動整合測試需要 `python3`，僅使用 Python 標準函式庫建立 PTY；Windows 會略過這組測試。Python 並非安裝或執行 Copse 的相依工具。
 
 ## 發布
 

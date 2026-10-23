@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use console::style;
-use dialoguer::{FuzzySelect, Input, theme::ColorfulTheme};
+use dialoguer::Input;
 use std::path::{Path, PathBuf};
 
-use crate::git;
+use crate::{fuzzy_select::fuzzy_select, git};
 
 const NO_REFS: &str = "找不到可建立 worktree 的分支或標籤。";
 const SELECT_REFERENCE: &str = "選擇建立 worktree 的分支或標籤";
@@ -30,22 +30,13 @@ pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
         .iter()
         .map(|reference| reference.display.as_str())
         .collect();
-    let theme = ColorfulTheme::default();
-    let Some(selection) = FuzzySelect::with_theme(&theme)
-        .with_prompt(SELECT_REFERENCE)
-        .items(&display_items)
-        .default(0)
-        .interact_opt()?
-    else {
+    let Some(selection) = fuzzy_select(SELECT_REFERENCE, &display_items)? else {
         println!("{}", style(OPERATION_CANCELLED).yellow());
         return Ok(());
     };
     let selected_ref = &refs[selection];
-    let Some(create_choice) = FuzzySelect::with_theme(&theme)
-        .with_prompt(SELECT_CREATE_MODE)
-        .items([CREATE_NEW_BRANCH, CREATE_DIRECTLY])
-        .default(0)
-        .interact_opt()?
+    let Some(create_choice) =
+        fuzzy_select(SELECT_CREATE_MODE, &[CREATE_NEW_BRANCH, CREATE_DIRECTLY])?
     else {
         println!("{}", style(OPERATION_CANCELLED).yellow());
         return Ok(());

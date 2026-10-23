@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use console::style;
-use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, MultiSelect, theme::ColorfulTheme};
 
-use crate::git;
+use crate::{fuzzy_select::fuzzy_select, git};
 use discovery::canonical_path;
 use item_result::ItemResult;
 pub use mode::DeleteMode;
@@ -193,11 +193,7 @@ pub(super) fn select_and_execute(
         Some(selected) if !selected.is_empty() => selected,
         _ => return cancelled(),
     };
-    let choice = FuzzySelect::with_theme(&theme)
-        .with_prompt(MODE_PROMPT)
-        .items(&MODE_LABELS)
-        .default(0)
-        .interact_opt()?;
+    let choice = fuzzy_select(MODE_PROMPT, &MODE_LABELS)?;
     let Some(choice) = choice else {
         return cancelled();
     };
