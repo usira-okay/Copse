@@ -4,7 +4,12 @@ use std::path::PathBuf;
 
 /// 互動選單與參數式操作共用的命令列入口。
 #[derive(Parser, Debug)]
-#[command(name = "copse", version, about = "以互動選單或參數管理 Git worktree")]
+#[command(
+    name = "copse",
+    bin_name = "copse",
+    version,
+    about = "以互動選單或參數管理 Git worktree"
+)]
 pub struct Cli {
     /// 顯示詳細診斷資訊。
     #[arg(short, long, global = true)]

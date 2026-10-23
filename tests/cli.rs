@@ -12,8 +12,15 @@ fn branch_name(sandbox: &TestSandbox, worktree: &Path) -> String {
 fn help_and_version_work_outside_a_repository() {
     let sandbox = TestSandbox::new();
     for arguments in [["--help"], ["--version"]] {
-        assert_code(&copse(&sandbox.root, &arguments), 0);
+        let output = copse(&sandbox.root, &arguments);
+        assert_code(&output, 0);
+        if arguments == ["--help"] {
+            assert!(stdout(&output).contains("Usage: copse [OPTIONS] [COMMAND]"));
+        }
     }
+    let output = copse(&sandbox.root, &["list", "--help"]);
+    assert_code(&output, 0);
+    assert!(stdout(&output).contains("Usage: copse list [OPTIONS]"));
 }
 
 #[test]

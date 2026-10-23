@@ -73,6 +73,27 @@ pub fn run(cli: Cli) -> Result<()> {
             )?;
             actions::move_to::execute(selected)
         }
+        Some(CliCommand::CopyChanges {
+            from_path,
+            from_branch,
+            include_untracked,
+            three_way,
+        }) => {
+            let entries = git::list_worktrees_at(&directory, cli.verbose)?;
+            let source = worktree_selection::resolve(
+                &entries,
+                &directory,
+                from_path.as_deref(),
+                from_branch.as_deref(),
+            )?;
+            actions::copy_changes::execute(
+                &directory,
+                source,
+                include_untracked,
+                three_way,
+                cli.verbose,
+            )
+        }
         None => {
             std::env::set_current_dir(&directory).context(CHANGE_DIRECTORY_FAILED)?;
             interactive::run(cli.verbose, cli.absolute_path, &protected_dirs)

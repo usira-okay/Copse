@@ -72,4 +72,20 @@ pub enum CliCommand {
         #[arg(long, value_name = "分支")]
         branch: Option<String>,
     },
+    /// 將其他 worktree 相對 HEAD 的最終變更複製到有效 worktree。
+    #[command(group(ArgGroup::new("source").required(true).args(["from_path", "from_branch"])))]
+    CopyChanges {
+        /// 精確指定來源 worktree 根目錄。
+        #[arg(long, value_name = "路徑")]
+        from_path: Option<PathBuf>,
+        /// 精確指定來源 worktree 的本地分支。
+        #[arg(long, value_name = "分支")]
+        from_branch: Option<String>,
+        /// 同時複製未追蹤的一般檔案，目的路徑必須不存在。
+        #[arg(long)]
+        include_untracked: bool,
+        /// 一般套用預檢失敗時允許三方合併；衝突會保留並回報失敗。
+        #[arg(long = "3way")]
+        three_way: bool,
+    },
 }

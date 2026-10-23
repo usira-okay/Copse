@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 mod worktree_source;
 pub use worktree_source::WorktreeSource;
@@ -756,180 +756,148 @@ fn decode_git_path(output: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// 檢查 worktree 的變更，讀取狀態時不刷新 Git index。
-pub fn worktree_has_changes(path: &str, verbose: bool) -> Result<bool> {
-    worktree_has_changes_at(Path::new(path), verbose)
+const COPY_DIFF_FAILED: &str = "無法取得來源 worktree 的最終內容差異";
+const COPY_APPLY_FAILED: &str = "無法套用來源 worktree 的變更";
+const COPY_APPLY_CONFLICT: &str = "變更無法直接套用；確認需要三方合併後可指定 --3way";
+const COPY_THREE_WAY_FAILED: &str = "三方合併未成功；可能已留下衝突，請檢查目的 worktree";
+const COPY_PATCH_INPUT_FAILED: &str = "無法將完整 patch 傳送給 Git";
+const COPY_UNTRACKED_LIST_FAILED: &str = "無法列出未追蹤檔案";
+const COPY_UNTRACKED_PATH_INVALID: &str = "未追蹤檔案清單包含無法安全使用的路徑";
+
+/// 取得來源相對 HEAD 的最終內容差異，保留二進位內容且不拆分 index 與工作目錄。
+pub fn get_worktree_diff_at(path: &Path, verbose: bool) -> Result<Vec<u8>> {
+    let output = command_at(path)
+        .args([
+            "--no-optional-locks",
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-relative",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ])
+        .output()
+        .with_context(|| format!("{COPY_DIFF_FAILED}：{path:?}"))?;
+    ensure!(
+        output.status.success(),
+        "{COPY_DIFF_FAILED}：{path:?}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if verbose {
+        eprintln!("[DEBUG] 來源 {path:?}：patch {} bytes", output.stdout.len());
+    }
+    Ok(output.stdout)
 }
 
-/// Get the diff (patch) of changes in a worktree (both staged and unstaged).
-pub fn get_worktree_diff(path: &str, verbose: bool) -> Result<String> {
-    if verbose {
-        eprintln!("[DEBUG] Getting diff from worktree at {}", path);
+/// 一般套用必須通過零寫入預檢；只有明確允許時才在失敗後改用三方合併。
+pub fn apply_worktree_diff_at(
+    destination: &Path,
+    diff: &[u8],
+    three_way: bool,
+    verbose: bool,
+) -> Result<()> {
+    if diff.is_empty() {
+        return Ok(());
     }
-
-    // Get unstaged changes
-    let unstaged = command_at(Path::new("."))
-        .args(["diff"])
-        .current_dir(path)
-        .output()
-        .context("Failed to get unstaged diff")?;
-
-    // Get staged changes
-    let staged = command_at(Path::new("."))
-        .args(["diff", "--cached"])
-        .current_dir(path)
-        .output()
-        .context("Failed to get staged diff")?;
-
-    let mut diff = String::new();
-    let unstaged_str = String::from_utf8_lossy(&unstaged.stdout);
-    let staged_str = String::from_utf8_lossy(&staged.stdout);
-
-    if !unstaged_str.is_empty() {
-        diff.push_str(&unstaged_str);
+    let checked = run_apply_at(destination, diff, &["--check"])?;
+    let use_three_way = !checked.status.success();
+    ensure!(
+        !use_three_way || three_way,
+        "{COPY_APPLY_CONFLICT}：{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let options: &[&str] = if use_three_way { &["--3way"] } else { &[] };
+    let output = run_apply_at(destination, diff, options)?;
+    if verbose && !output.stderr.is_empty() {
+        eprintln!("[DEBUG] {}", String::from_utf8_lossy(&output.stderr));
     }
-    if !staged_str.is_empty() {
-        if !diff.is_empty() {
-            diff.push('\n');
-        }
-        diff.push_str(&staged_str);
-    }
-
-    // Also get untracked files
-    let untracked = command_at(Path::new("."))
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(path)
-        .output()
-        .context("Failed to list untracked files")?;
-
-    let untracked_str = String::from_utf8_lossy(&untracked.stdout);
-    if !untracked_str.trim().is_empty() && verbose {
-        eprintln!("[DEBUG] Untracked files in source worktree:");
-        for f in untracked_str.lines() {
-            eprintln!("  {}", f);
-        }
-    }
-
-    Ok(diff)
-}
-
-/// Apply a diff (patch) to the current worktree.
-pub fn apply_diff(diff: &str, verbose: bool) -> Result<bool> {
-    if verbose {
-        eprintln!("[DEBUG] Applying diff ({} bytes)", diff.len());
-    }
-
-    let mut child = command_at(Path::new("."))
-        .args(["apply", "--check", "-"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("Failed to spawn git apply --check")?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        use std::io::Write;
-        stdin
-            .write_all(diff.as_bytes())
-            .context("Failed to write diff to git apply --check")?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git apply --check")?;
-    let can_apply_cleanly = output.status.success();
-
-    if verbose {
-        eprintln!("[DEBUG] Diff can apply cleanly: {}", can_apply_cleanly);
-        if !can_apply_cleanly {
-            eprintln!(
-                "[DEBUG] Apply check errors: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-    }
-
-    Ok(can_apply_cleanly)
-}
-
-/// Force apply a diff to the current worktree.
-pub fn force_apply_diff(diff: &str, verbose: bool) -> Result<()> {
-    if verbose {
-        eprintln!("[DEBUG] Force applying diff ({} bytes)", diff.len());
-    }
-
-    let mut child = command_at(Path::new("."))
-        .args(["apply", "-"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("Failed to spawn git apply")?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        use std::io::Write;
-        stdin
-            .write_all(diff.as_bytes())
-            .context("Failed to write diff to git apply")?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git apply")?;
-
-    if !output.status.success() {
-        bail!(
-            "Failed to apply diff: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
+    let failure = if use_three_way {
+        COPY_THREE_WAY_FAILED
+    } else {
+        COPY_APPLY_FAILED
+    };
+    ensure!(
+        output.status.success(),
+        "{failure}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 
-/// Apply diff with 3-way merge fallback for conflict handling.
-pub fn apply_diff_with_fallback(diff: &str, verbose: bool) -> Result<()> {
-    if verbose {
-        eprintln!(
-            "[DEBUG] Applying diff with 3-way merge fallback ({} bytes)",
-            diff.len()
-        );
-    }
+fn run_apply_at(destination: &Path, diff: &[u8], options: &[&str]) -> Result<Output> {
+    use std::io::Write;
 
-    let mut child = command_at(Path::new("."))
-        .args(["apply", "--3way", "-"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+    let mut child = command_at(destination)
+        .args([
+            "-c",
+            "apply.ignoreWhitespace=no",
+            "apply",
+            "--whitespace=nowarn",
+            "-p1",
+        ])
+        .args(options)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .context("Failed to spawn git apply --3way")?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        use std::io::Write;
-        stdin
-            .write_all(diff.as_bytes())
-            .context("Failed to write diff to git apply --3way")?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git apply --3way")?;
-
-    if verbose {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.is_empty() {
-            eprintln!("[DEBUG] Apply --3way output: {}", stderr);
+        .context(COPY_APPLY_FAILED)?;
+    let mut stdin = child.stdin.take().context(COPY_PATCH_INPUT_FAILED)?;
+    // 大型 patch 的輸入與診斷輸出需同時處理，避免雙方等待管線緩衝區。
+    std::thread::scope(|scope| -> Result<Output> {
+        let writer = scope.spawn(move || stdin.write_all(diff));
+        let output = child.wait_with_output();
+        let written = writer
+            .join()
+            .map_err(|_| anyhow::anyhow!(COPY_PATCH_INPUT_FAILED))?;
+        let output = output.context(COPY_APPLY_FAILED)?;
+        // Git 提早拒絕 patch 時會關閉 stdin；保留其 stderr 供上層回報真正失敗原因。
+        if output.status.success() {
+            written.context(COPY_PATCH_INPUT_FAILED)?;
         }
-    }
+        Ok(output)
+    })
+}
 
-    if !output.status.success() {
-        bail!(
-            "Failed to apply diff (some conflicts may remain): {}",
-            String::from_utf8_lossy(&output.stderr)
+/// 以 NUL 分隔讀取未追蹤檔案，保留空白與換行並限制為 worktree 內相對路徑。
+pub fn list_untracked_files_at(source: &Path, verbose: bool) -> Result<Vec<PathBuf>> {
+    let output = command_at(source)
+        .args(["ls-files", "--others", "--exclude-standard", "-z", "--"])
+        .output()
+        .with_context(|| format!("{COPY_UNTRACKED_LIST_FAILED}：{source:?}"))?;
+    ensure!(
+        output.status.success(),
+        "{COPY_UNTRACKED_LIST_FAILED}：{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    let names = std::str::from_utf8(&output.stdout)
+        .context(COPY_UNTRACKED_PATH_INVALID)?
+        .strip_suffix('\0')
+        .context(COPY_UNTRACKED_PATH_INVALID)?;
+    let mut paths = Vec::new();
+    for name in names.split('\0') {
+        let path = PathBuf::from(name);
+        ensure!(
+            !name.is_empty()
+                && path
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_))),
+            "{COPY_UNTRACKED_PATH_INVALID}：{path:?}"
         );
+        paths.push(path);
     }
-
-    Ok(())
+    if verbose {
+        eprintln!("[DEBUG] 來源 {source:?}：{} 個未追蹤檔案", paths.len());
+    }
+    Ok(paths)
 }
 
 /// Strip UNC prefix from a `PathBuf`, returning a cleaned `PathBuf`.
@@ -940,41 +908,6 @@ pub fn strip_unc_prefix_path(path: PathBuf) -> PathBuf {
     } else {
         path
     }
-}
-
-/// Copy untracked files from source worktree to current directory.
-pub fn copy_untracked_files(source_path: &str, verbose: bool) -> Result<()> {
-    let output = command_at(Path::new("."))
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(source_path)
-        .output()
-        .context("Failed to list untracked files")?;
-
-    let files = String::from_utf8_lossy(&output.stdout);
-    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-    for file in files.lines() {
-        let file = file.trim();
-        if file.is_empty() {
-            continue;
-        }
-        let source = Path::new(source_path).join(file);
-        let dest = current_dir.join(file);
-
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create directory {:?}", parent))?;
-        }
-
-        if verbose {
-            eprintln!("[DEBUG] Copying untracked file: {} -> {:?}", file, dest);
-        }
-
-        std::fs::copy(&source, &dest)
-            .with_context(|| format!("Failed to copy {:?} to {:?}", source, dest))?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
