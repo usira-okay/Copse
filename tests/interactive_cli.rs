@@ -19,7 +19,7 @@ fn run_scenario(scenario: &str) {
         .arg("-B")
         .arg(PTY_DRIVER)
         .arg(scenario)
-        .arg(env!("CARGO_BIN_EXE_git_worktree_copse"))
+        .arg(env!("CARGO_BIN_EXE_copse"))
         .arg(&repository)
         .arg(&target)
         .output()

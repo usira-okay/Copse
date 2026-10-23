@@ -18,10 +18,21 @@ A CLI tool to quickly control [git worktree](https://git-scm.com/docs/git-worktr
 
 ## Installation
 
+### 從 crates.io 安裝
+
+```bash
+cargo install git_worktree_copse --version 0.2.0 --locked
+copse --help
+```
+
+crate 名稱維持 `git_worktree_copse`，0.2.0 起只提供 `copse` 執行檔。升級後請將既有腳本、捷徑與 shell wrapper 中的 `git_worktree_copse` 命令改為 `copse`；安裝指令仍使用原 crate 名稱。
+
+未自訂安裝根目錄時，請確認 Cargo 的執行檔目錄已加入 `PATH`：Unix 預設為 `$HOME/.cargo/bin`，Windows 預設為 `%USERPROFILE%\.cargo\bin`（PowerShell：`$env:USERPROFILE\.cargo\bin`）。若設定 `CARGO_HOME`，則使用該目錄下的 `bin`；使用 `cargo install --root <目錄>` 時，則使用 `<目錄>/bin`。
+
 ### From source
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 ### Build manually
@@ -29,16 +40,16 @@ cargo install --path .
 ```bash
 git clone https://github.com/usira-okay/Copse.git
 cd Copse
-cargo build --release
-# Binary is at target/release/git_worktree_copse
+cargo build --release --locked
+# 執行檔位於 target/release/copse（Windows 為 copse.exe）
 ```
 
 ## Usage
 
-Run `git_worktree_copse` inside any git repository:
+Run `copse` inside any git repository:
 
 ```bash
-git_worktree_copse
+copse
 ```
 
 You will be presented with an interactive menu to select an action:
@@ -61,23 +72,23 @@ Select an action:
 | `-C <目錄>` | — | 指定有效工作目錄；可放在子命令前後 |
 
 ```bash
-git_worktree_copse --verbose
-git_worktree_copse -a
+copse --verbose
+copse -a
 ```
 
 ### 參數模式
 
-執行檔名稱仍為 `git_worktree_copse`。不指定子命令時顯示互動選單；指定子命令後不會補問參數。
+不指定子命令時顯示互動選單；指定子命令後不會補問參數。
 
 ```bash
-git_worktree_copse -C ~/ProjectA list --json
-git_worktree_copse create feature/topic
-git_worktree_copse create HEAD --new-branch feature/new
-git_worktree_copse move-to --branch feature/topic
-git_worktree_copse delete --branch feature/a --branch feature/b --yes
-git_worktree_copse batch-delete --root ~/worktree --all --dry-run
-git_worktree_copse batch-delete --root ~/worktree --all --yes
-git_worktree_copse copy-changes --from-branch feature/topic --include-untracked --3way
+copse -C ~/ProjectA list --json
+copse create feature/topic
+copse create HEAD --new-branch feature/new
+copse move-to --branch feature/topic
+copse delete --branch feature/a --branch feature/b --yes
+copse batch-delete --root ~/worktree --all --dry-run
+copse batch-delete --root ~/worktree --all --yes
+copse copy-changes --from-branch feature/topic --include-untracked --3way
 ```
 
 | 子命令 | 用法 |
@@ -102,6 +113,8 @@ git_worktree_copse copy-changes --from-branch feature/topic --include-untracked 
 退出碼：成功 `0`、參數錯誤 `2`、操作失敗 `1`。結果輸出至 stdout，錯誤與 debug 輸出至 stderr。執行期間部分失敗不會回復已完成的動作。Copse 與標準 Git 驗證不補問輸入；自訂 Git hooks 仍會執行，須自行確保不等待互動。
 
 ### Actions
+
+互動操作需保留可輸入的終端，並讓 stderr 連接終端（TTY）；stdout 可由 shell wrapper 擷取，選單與 ANSI 控制碼不會混入 `COPSE_CD` 輸出。模糊搜尋支援中文與非連續字元；0.2.0 的選單外觀與搜尋結果排序可能與舊版不同。模糊搜尋選單按 Esc 可正常取消，按 Ctrl-C 則以非零退出碼中斷。
 
 #### create
 
@@ -140,14 +153,14 @@ git_worktree_copse copy-changes --from-branch feature/topic --include-untracked 
 
 ### Shell integration
 
-`git_worktree_copse` cannot change the shell's working directory directly. The `move-to` and `create` actions output a `COPSE_CD:<path>` line that a shell wrapper can use.
+`copse` cannot change the shell's working directory directly. The `move-to` and `create` actions output a `COPSE_CD:<path>` line that a shell wrapper can use.
 
 Example wrapper for Bash/Zsh:
 
 ```bash
 copse_wrapper() {
   local output copse_exit=0 line cd_path=''
-  output=$(git_worktree_copse "$@") || copse_exit=$?
+  output=$(copse "$@") || copse_exit=$?
   printf '%s\n' "$output"
   if [ "$copse_exit" -ne 0 ]; then
     return "$copse_exit"
@@ -169,7 +182,7 @@ Example wrapper for PowerShell:
 
 ```powershell
 function Invoke-Copse {
-  $output = & git_worktree_copse @args
+  $output = & copse @args
   $copseExitCode = $LASTEXITCODE
   $output | Write-Output
   if ($copseExitCode -ne 0) {
@@ -190,6 +203,19 @@ Set-Alias -Name cps -Value Invoke-Copse
 
 - Git ≥ 2.36（所有操作統一使用 NUL 分隔的 worktree 清單）
 - Rust ≥ 1.85 (edition 2024)
+
+Git 2.36 僅為功能門檻，並非安全版本保證；例如 [Git 官方安全公告 GHSA-vwqx-4fm8-6qc9](https://github.com/git/git/security/advisories/GHSA-vwqx-4fm8-6qc9) 涵蓋多個仍符合此門檻的版本。請使用作業系統或 Git 發行商仍支援、已套用安全修補的版本；Copse 不會代為升級系統 Git。
+
+## 開發與測試
+
+先完成建置，再執行測試：
+
+```bash
+cargo build --release --locked
+cargo test --locked
+```
+
+Unix 的互動整合測試需要 `python3`，僅使用 Python 標準函式庫建立 PTY；Windows 會略過這組測試。Python 並非安裝或執行 Copse 的相依工具。
 
 ## Releasing
 

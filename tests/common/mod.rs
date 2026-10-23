@@ -14,7 +14,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// 關閉標準輸入並限制執行時間，驗證參數模式不會等待互動輸入。
 pub fn copse(directory: &Path, arguments: &[&str]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_git_worktree_copse"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_copse"))
         .args(arguments)
         .current_dir(directory)
         .stdin(Stdio::null())
