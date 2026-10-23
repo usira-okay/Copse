@@ -23,9 +23,14 @@ impl TestSandbox {
             std::process::id()
         ));
         std::fs::create_dir_all(root.join("hooks")).unwrap();
-        Self {
-            root: crate::git::strip_unc_prefix_path(std::fs::canonicalize(root).unwrap()),
-        }
+        let root = std::fs::canonicalize(root).unwrap();
+        // 測試 fixture 同時供獨立執行檔測試使用，不依賴產品內部模組。
+        let root = root
+            .to_str()
+            .and_then(|path| path.strip_prefix(r"\\?\"))
+            .map(PathBuf::from)
+            .unwrap_or(root);
+        Self { root }
     }
 
     /// 建立具有初始提交的 repo，並關閉測試不需要的簽章與 hook。

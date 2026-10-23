@@ -1,157 +1,122 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use console::style;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
+use dialoguer::{FuzzySelect, Input, theme::ColorfulTheme};
 use std::path::{Path, PathBuf};
 
 use crate::git;
 
+const NO_REFS: &str = "找不到可建立 worktree 的分支或標籤。";
+const SELECT_REFERENCE: &str = "選擇建立 worktree 的分支或標籤";
+const OPERATION_CANCELLED: &str = "已取消操作。";
+const SELECT_CREATE_MODE: &str = "選擇建立 worktree 的方式";
+const CREATE_NEW_BRANCH: &str = "🌿  從來源建立新分支與 worktree";
+const CREATE_DIRECTLY: &str = "📂  直接從來源建立 worktree";
+const ENTER_NEW_BRANCH: &str = "輸入新分支名稱";
+const BRANCH_NAME_REQUIRED: &str = "分支名稱不可為空白";
+const CURRENT_DIR_FAILED: &str = "無法取得目前工作目錄";
+const MAIN_WORKTREE_REQUIRED: &str = "找不到主要 worktree";
+const REPO_NAME_REQUIRED: &str = "無法取得儲存庫名稱";
+const TARGET_PATH_FAILED: &str = "無法取得建立後的 worktree 路徑";
+const CD_MARKER: &str = "COPSE_CD:";
+
+/// 收集互動輸入後，使用參數模式共用的建立流程。
 pub fn run(verbose: bool, absolute_path: bool) -> Result<()> {
-    // Get all refs (branches and tags)
     let refs = git::get_all_refs(verbose)?;
     if refs.is_empty() {
-        println!("{}", style("No branches or tags found.").red());
+        println!("{}", style(NO_REFS).yellow());
         return Ok(());
     }
-
-    // Build display items for selection
-    let display_items: Vec<&str> = refs.iter().map(|r| r.display.as_str()).collect();
-
+    let display_items: Vec<&str> = refs
+        .iter()
+        .map(|reference| reference.display.as_str())
+        .collect();
     let theme = ColorfulTheme::default();
-    let selection = FuzzySelect::with_theme(&theme)
-        .with_prompt("Select a branch or tag to create a worktree from")
+    let Some(selection) = FuzzySelect::with_theme(&theme)
+        .with_prompt(SELECT_REFERENCE)
         .items(&display_items)
         .default(0)
-        .interact_opt()?;
-
-    let selection = match selection {
-        Some(s) => s,
-        None => {
-            println!("{}", style("Operation cancelled.").yellow());
-            return Ok(());
-        }
+        .interact_opt()?
+    else {
+        println!("{}", style(OPERATION_CANCELLED).yellow());
+        return Ok(());
     };
-
     let selected_ref = &refs[selection];
-    println!("Selected: {}", style(&selected_ref.display).green().bold());
-
-    // Ask user whether to create worktree directly or create a new branch first
-    let create_options = vec![
-        "🌿  Create a new branch from the selected ref, then create worktree",
-        "📂  Create worktree directly from the selected ref",
-    ];
-
-    let create_choice = FuzzySelect::with_theme(&theme)
-        .with_prompt("How would you like to create the worktree?")
-        .items(&create_options)
+    let Some(create_choice) = FuzzySelect::with_theme(&theme)
+        .with_prompt(SELECT_CREATE_MODE)
+        .items([CREATE_NEW_BRANCH, CREATE_DIRECTLY])
         .default(0)
-        .interact_opt()?;
-
-    let create_choice = match create_choice {
-        Some(c) => c,
-        None => {
-            println!("{}", style("Operation cancelled.").yellow());
-            return Ok(());
-        }
+        .interact_opt()?
+    else {
+        println!("{}", style(OPERATION_CANCELLED).yellow());
+        return Ok(());
     };
-
-    // Determine the branch name for the worktree path
-    let (branch_name, new_branch_name) = if create_choice == 0 {
-        // User wants to create a new branch
-        let new_name: String = Input::new()
-            .with_prompt("Enter the new branch name")
-            .interact_text()?;
-
-        if new_name.trim().is_empty() {
-            bail!("Branch name cannot be empty");
+    let new_branch = if create_choice == 0 {
+        let name: String = Input::new().with_prompt(ENTER_NEW_BRANCH).interact_text()?;
+        if name.trim().is_empty() {
+            bail!(BRANCH_NAME_REQUIRED);
         }
-
-        (new_name.clone(), Some(new_name))
+        Some(name)
     } else {
-        // Use the selected ref's name directly
-        let name = selected_ref.name.clone();
-        // For remote branches, strip the remote prefix for the folder name
-        let folder_name = if selected_ref.ref_type == git::GitRefType::RemoteBranch {
-            // e.g., "origin/feature-1" -> "feature-1"
-            name.split('/').skip(1).collect::<Vec<_>>().join("/")
-        } else {
-            name.clone()
-        };
-        (folder_name, None)
+        None
     };
+    // 使用完整 ref 保留使用者在互動清單中選擇的來源種類。
+    let reference = match selected_ref.ref_type {
+        git::GitRefType::LocalBranch => format!("refs/heads/{}", selected_ref.name),
+        git::GitRefType::RemoteBranch => format!("refs/remotes/{}", selected_ref.name),
+        git::GitRefType::LocalTag | git::GitRefType::RemoteTag => {
+            format!("refs/tags/{}", selected_ref.name)
+        }
+    };
+    execute(
+        &std::env::current_dir().context(CURRENT_DIR_FAILED)?,
+        &reference,
+        new_branch.as_deref(),
+        verbose,
+        absolute_path,
+    )
+}
 
-    // Compute the worktree path: ../worktree/{repoName}/{branch_name}, anchored
-    // to the main worktree so the layout is consistent no matter which
-    // worktree `create` is run from.
-    let main_root = git::get_main_worktree_root(verbose)?;
+/// 使用明確參數建立 worktree；路徑配置沿用主要 worktree，顯示以有效工作目錄為基準。
+pub fn execute(
+    repo_dir: &Path,
+    reference: &str,
+    new_branch: Option<&str>,
+    verbose: bool,
+    absolute_path: bool,
+) -> Result<()> {
+    let source = git::resolve_worktree_source_at(repo_dir, reference)?;
+    let worktrees = git::list_worktrees_at(repo_dir, verbose)?;
+    let main_root = Path::new(
+        &worktrees
+            .iter()
+            .find(|worktree| worktree.is_main)
+            .context(MAIN_WORKTREE_REQUIRED)?
+            .path,
+    );
     let repo_name = main_root
         .file_name()
-        .context("Could not determine repository name")?
-        .to_string_lossy()
-        .to_string();
-    let worktree_path = build_worktree_path(&main_root, &repo_name, &branch_name);
-
-    // Determine the path to use (relative or absolute). The relative display
-    // is computed from the current worktree's root (via `get_repo_root`, not
-    // `main_root`), so the printed `cd` hint is directly usable from wherever
-    // the user is standing (this matches the pre-existing display behavior).
-    let current_worktree_root = git::get_repo_root()?;
+        .and_then(|name| name.to_str())
+        .context(REPO_NAME_REQUIRED)?;
+    let branch_name = new_branch.unwrap_or(&source.directory_name);
+    let worktree_path = build_worktree_path(main_root, repo_name, branch_name);
+    git::ensure_single_line_path(&worktree_path)?;
     let display_path = if absolute_path {
         worktree_path.clone()
     } else {
-        pathdiff_relative(&current_worktree_root, &worktree_path)
+        pathdiff_relative(repo_dir, &worktree_path)
     };
-
-    println!(
-        "Worktree will be created at: {}",
-        style(display_path.display()).cyan().bold()
-    );
-
-    // Always pass the absolute path to git commands, regardless of the display preference.
-    if let Some(ref new_branch) = new_branch_name {
-        git::create_worktree_new_branch(&worktree_path, new_branch, &selected_ref.name, verbose)?;
-        println!(
-            "{}",
-            style(format!(
-                "Created worktree with new branch '{}' from '{}'",
-                new_branch, selected_ref.name
-            ))
-            .green()
-        );
-    } else {
-        git::create_worktree_from_ref(
-            &worktree_path,
-            &selected_ref.name,
-            selected_ref.ref_type.clone(),
-            verbose,
-        )?;
-        println!(
-            "{}",
-            style(format!("Created worktree for '{}'", selected_ref.name)).green()
-        );
-    }
-
-    // Automatically move to the new worktree
-    let target = std::fs::canonicalize(&worktree_path).unwrap_or(worktree_path.clone());
-    let target_str = target.display().to_string();
-    let target_str = git::strip_unc_prefix(&target_str);
-    println!(
-        "{}",
-        style(format!(
-            "To move to the new worktree, run:\n  cd {}",
-            target_str
-        ))
-        .cyan()
-    );
-    // Print the path so shell wrapper scripts can use it
-    println!("COPSE_CD:{}", target_str);
-
+    git::create_worktree_at(repo_dir, &worktree_path, &source, new_branch, verbose)?;
+    println!("已建立 worktree：{}", style(display_path.display()).green());
+    let target = worktree_path.canonicalize().context(TARGET_PATH_FAILED)?;
+    let target = git::strip_unc_prefix_path(target);
+    git::ensure_single_line_path(&target)?;
+    println!("{CD_MARKER}{}", target.display());
     Ok(())
 }
 
-/// Compute a relative path from `base` to `target`.
+/// 以有效工作目錄計算可直接使用的相對路徑。
 fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBuf {
-    // Try to compute a relative path; strip UNC prefix that canonicalize
-    // may produce on Windows so the component comparison works correctly.
+    // Windows 的延伸路徑前綴會干擾元件比較，先統一成一般路徑。
     let base = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
     let base = git::strip_unc_prefix_path(base);
     let target_abs = if target.is_absolute() {
@@ -160,11 +125,9 @@ fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBu
         base.join(target)
     };
 
-    // Simple relative path computation
     let base_components: Vec<_> = base.components().collect();
     let target_components: Vec<_> = target_abs.components().collect();
 
-    // Find common prefix length
     let common_len = base_components
         .iter()
         .zip(target_components.iter())
@@ -173,12 +136,10 @@ fn pathdiff_relative(base: &std::path::Path, target: &std::path::Path) -> PathBu
 
     let mut result = PathBuf::new();
 
-    // Add ".." for each remaining base component
     for _ in common_len..base_components.len() {
         result.push("..");
     }
 
-    // Add remaining target components
     for component in &target_components[common_len..] {
         result.push(component);
     }
@@ -195,8 +156,7 @@ fn build_worktree_path(repo_root: &Path, repo_name: &str, branch_name: &str) -> 
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/"));
-    // Canonicalize parent_dir so path components are consistent with the
-    // canonicalized base used inside pathdiff_relative.
+    // 與相對路徑基準使用一致的正規化方式。
     let parent_dir = std::fs::canonicalize(&parent_dir)
         .map(git::strip_unc_prefix_path)
         .unwrap_or(parent_dir);
@@ -207,8 +167,7 @@ fn build_worktree_path(repo_root: &Path, repo_name: &str, branch_name: &str) -> 
         .join(sanitize_branch_name(branch_name))
 }
 
-/// Sanitize a branch name for use as a directory name.
-/// Replaces characters that are problematic on various filesystems.
+/// 沿用既有目錄命名規則，替換各平台檔案系統不接受的字元。
 fn sanitize_branch_name(name: &str) -> String {
     name.chars()
         .map(|c| match c {

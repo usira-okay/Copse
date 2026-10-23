@@ -23,7 +23,7 @@ const NOT_DIRECTORY: &str = "worktree 路徑不是目錄";
 const CURRENT_DIRECTORY_ERROR: &str = "無法取得目前目錄";
 const MAIN_WORKTREE: &str = "保護主 worktree";
 const BARE_WORKTREE: &str = "排除 bare 儲存庫";
-const CURRENT_WORKTREE: &str = "保護包含啟動目錄的 worktree";
+const CURRENT_WORKTREE: &str = "保護包含啟動目錄或有效工作目錄的 worktree";
 const LOCKED_WORKTREE: &str = "排除已鎖定的 worktree";
 const PRUNABLE_WORKTREE: &str = "排除失效的 worktree 登錄";
 const MISSING_WORKTREE: &str = "排除不存在的 worktree";
@@ -38,10 +38,13 @@ pub struct Discovery {
     pub root: PathBuf,
 }
 
-/// 探索搜尋根目錄內的 Git worktree，並保護主工作樹與啟動目錄。
-pub fn discover(root: &Path, original_dir: &Path, verbose: bool) -> Result<Discovery> {
+/// 探索搜尋根目錄內的 Git worktree，並保護主工作樹與兩個工作目錄。
+pub fn discover(root: &Path, protected_dirs: &[PathBuf], verbose: bool) -> Result<Discovery> {
     let root = canonical_path(root)?;
-    let original_dir = canonical_path(original_dir)?;
+    let protected_dirs: Vec<_> = protected_dirs
+        .iter()
+        .map(|directory| canonical_path(directory))
+        .collect::<Result<_>>()?;
     let mut root_entries =
         Some(fs::read_dir(&root).with_context(|| format!("{CANNOT_READ_ROOT}: {root:?}"))?);
     let mut discovery = Discovery {
@@ -71,7 +74,7 @@ pub fn discover(root: &Path, original_dir: &Path, verbose: bool) -> Result<Disco
             Ok(metadata) if metadata.is_file() || metadata.is_dir() => {
                 if let Err(error) = discover_repository(
                     &directory,
-                    &original_dir,
+                    &protected_dirs,
                     verbose,
                     &mut repositories,
                     &mut discovery,
@@ -206,7 +209,7 @@ pub fn ensure_within_root(path: &Path, root: &Path) -> Result<PathBuf> {
 
 fn discover_repository(
     directory: &Path,
-    original_dir: &Path,
+    protected_dirs: &[PathBuf],
     verbose: bool,
     repositories: &mut HashSet<PathBuf>,
     discovery: &mut Discovery,
@@ -286,7 +289,10 @@ fn discover_repository(
             discovery.errors.push(format!("{error:#}"));
             continue;
         }
-        if original_dir.starts_with(&path) {
+        if protected_dirs
+            .iter()
+            .any(|directory| directory.starts_with(&path))
+        {
             discovery
                 .excluded
                 .push(format!("{CURRENT_WORKTREE}: {raw_path:?}"));
@@ -320,7 +326,7 @@ mod tests {
         sandbox.worktree(&alpha, "outside/alpha", "outside");
         let root = sandbox.root.join("batch");
 
-        let discovery = discover(&root, &alpha, false).unwrap();
+        let discovery = discover(&root, std::slice::from_ref(&alpha), false).unwrap();
 
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
         assert_eq!(discovery.root, canonical_path(&root).unwrap());
@@ -367,7 +373,7 @@ mod tests {
                 .success()
         );
 
-        let discovery = discover(&sandbox.root, &original, false).unwrap();
+        let discovery = discover(&sandbox.root, std::slice::from_ref(&original), false).unwrap();
 
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
         assert_eq!(discovery.targets.len(), 1);
@@ -403,7 +409,12 @@ mod tests {
         let available = sandbox.worktree(&repo, "batch/available", "available");
         fs::remove_dir_all(&missing).unwrap();
 
-        let discovery = discover(&sandbox.root.join("batch"), &repo, false).unwrap();
+        let discovery = discover(
+            &sandbox.root.join("batch"),
+            std::slice::from_ref(&repo),
+            false,
+        )
+        .unwrap();
 
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
         assert_eq!(discovery.targets.len(), 1);
@@ -425,7 +436,7 @@ mod tests {
         let repo = sandbox.repo("repo");
         let worktree = sandbox.worktree(&repo, "exact root", "feature");
 
-        let discovery = discover(&worktree, &repo, false).unwrap();
+        let discovery = discover(&worktree, std::slice::from_ref(&repo), false).unwrap();
 
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
         assert_eq!(discovery.targets.len(), 1);
@@ -442,8 +453,15 @@ mod tests {
         let file = sandbox.root.join("file");
         fs::write(&file, "不是目錄").unwrap();
 
-        assert!(discover(&sandbox.root.join("missing"), &repo, false).is_err());
-        assert!(discover(&file, &repo, false).is_err());
+        assert!(
+            discover(
+                &sandbox.root.join("missing"),
+                std::slice::from_ref(&repo),
+                false
+            )
+            .is_err()
+        );
+        assert!(discover(&file, std::slice::from_ref(&repo), false).is_err());
     }
 
     #[test]
@@ -453,7 +471,7 @@ mod tests {
         let inner = sandbox.repo("outer/inner");
         sandbox.worktree(&inner, "outer/inner-linked", "nested");
 
-        let discovery = discover(&outer, &outer, false).unwrap();
+        let discovery = discover(&outer, std::slice::from_ref(&outer), false).unwrap();
 
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
         assert!(discovery.targets.is_empty());
@@ -468,7 +486,12 @@ mod tests {
         fs::create_dir_all(&broken).unwrap();
         fs::write(broken.join(".git"), "gitdir: /copse/missing/repository\n").unwrap();
 
-        let discovery = discover(&sandbox.root.join("batch"), &repo, false).unwrap();
+        let discovery = discover(
+            &sandbox.root.join("batch"),
+            std::slice::from_ref(&repo),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(discovery.targets.len(), 1);
         assert_eq!(
@@ -511,7 +534,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         symlink(&worktree, root.join("shortcut")).unwrap();
 
-        let discovery = discover(&root, &repo, false).unwrap();
+        let discovery = discover(&root, std::slice::from_ref(&repo), false).unwrap();
 
         assert!(discovery.targets.is_empty());
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
@@ -531,7 +554,7 @@ mod tests {
         symlink(&root, &alias).unwrap();
         symlink(&worktree, root.join("inner")).unwrap();
 
-        let discovery = discover(&alias, &repo, false).unwrap();
+        let discovery = discover(&alias, std::slice::from_ref(&repo), false).unwrap();
 
         assert!(discovery.errors.is_empty(), "{:?}", discovery.errors);
         assert_eq!(discovery.targets.len(), 1);

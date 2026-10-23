@@ -38,11 +38,11 @@ jobs:
           fi
           echo "版本一致：${CARGO_VERSION}"
 
-      - name: Run tests
-        run: cargo test --locked
-
       - name: Build release binary
         run: cargo build --release --locked
+
+      - name: Run tests
+        run: cargo test --locked
 
       - name: Dry-run publish
         run: cargo publish --dry-run --locked
